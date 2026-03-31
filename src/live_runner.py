@@ -1,0 +1,155 @@
+import copy
+import json
+import time
+from pathlib import Path
+
+import pandas as pd
+
+
+def run_live(symbol: str, timeframe_mt5, config: dict,
+             prob_table: pd.DataFrame,
+             marginal_table: pd.DataFrame = None,
+             load_mt5_live=None,
+             EngineState=None,
+             update_engine_state=None,
+             generate_signal=None,
+             regime_gate=None,
+             apply_filters=None,
+             on_state_update=None) -> None:
+    """
+    Live mode runner with:
+    - Session warmup guard (no signals for first N bars after VWAP reset)
+    - Signal state machine (alerts only on state transitions)
+    - Reconnection loop with backoff
+    - JSON state output to live_artifacts/live_state.json each bar
+
+    Signal states: NO_SIGNAL → SIGNAL_ACTIVE → SIGNAL_RESOLVED
+    Alert fires only on: NO_SIGNAL→ACTIVE, ACTIVE→RESOLVED transitions.
+    """
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        raise ImportError("pip install MetaTrader5")
+
+    if load_mt5_live is None:
+        raise ValueError("run_live() requires load_mt5_live")
+    if EngineState is None:
+        raise ValueError("run_live() requires EngineState")
+    if update_engine_state is None:
+        raise ValueError("run_live() requires update_engine_state")
+    if generate_signal is None:
+        raise ValueError("run_live() requires generate_signal")
+    if regime_gate is None:
+        raise ValueError("run_live() requires regime_gate")
+    if apply_filters is None:
+        raise ValueError("run_live() requires apply_filters")
+
+    if marginal_table is None:
+        marginal_table = prob_table
+
+    output_path = Path("live_artifacts/live_state.json")
+    output_path.parent.mkdir(exist_ok=True)
+
+    # ── Warm up engine ──
+    warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
+    state = EngineState()
+    for _, row in warmup_df.iterrows():
+        state = update_engine_state(state, row.to_dict(), config,
+                                    prob_table, marginal_table)
+    print(f"✅ Live engine warmed up on {len(warmup_df)} bars")
+
+    last_bar_time = None
+    signal_state = 'NO_SIGNAL'   # state machine
+    active_signal = None         # the SignalResult currently active
+    reconnect_wait = 1
+
+    print(f"🟢 Live mode active — {symbol} | Ctrl+C to stop")
+    try:
+        while True:
+            try:
+                rates = mt5.copy_rates_from_pos(symbol, timeframe_mt5, 1, 1)
+            except Exception as e:
+                print(f"⚠️  MT5 read error: {e} — retrying in {reconnect_wait}s")
+                time.sleep(reconnect_wait)
+                reconnect_wait = min(reconnect_wait * 2, 60)
+                continue
+
+            reconnect_wait = 1  # reset on success
+
+            if rates is None or len(rates) == 0:
+                time.sleep(1)
+                continue
+
+            bar_time = rates[0]['time']
+            if bar_time == last_bar_time:
+                time.sleep(1)
+                continue
+
+            last_bar_time = bar_time
+            bar = {
+                'datetime':    pd.Timestamp(bar_time, unit='s', tz='UTC'),
+                'open':        float(rates[0]['open']),
+                'high':        float(rates[0]['high']),
+                'low':         float(rates[0]['low']),
+                'close':       float(rates[0]['close']),
+                'tick_volume': float(rates[0]['tick_volume']),
+            }
+
+            state = update_engine_state(state, bar, config, prob_table, marginal_table)
+            sig = generate_signal(state, config)
+            sig = regime_gate(sig, config)
+            sig = apply_filters(sig, state, config)
+
+            # ── Alert state machine ──
+            alert = None
+            new_sig_state = 'SIGNAL_ACTIVE' if sig.signal_type != 'NO_SIGNAL' else 'NO_SIGNAL'
+
+            if signal_state == 'NO_SIGNAL' and new_sig_state == 'SIGNAL_ACTIVE':
+                alert = f"🔔 NEW SIGNAL: {sig.signal_type} | Zone {sig.zone} | EdgeGap {sig.edge_gap:.2f}"
+                active_signal = sig
+
+            elif signal_state == 'SIGNAL_ACTIVE' and new_sig_state == 'NO_SIGNAL':
+                alert = f"✅ SIGNAL RESOLVED: {active_signal.signal_type} | Z now={state.z_score:.2f}"
+                active_signal = None
+                new_sig_state = 'NO_SIGNAL'
+
+            signal_state = new_sig_state
+
+            # ── Live state JSON output (read by MQL5 overlay) ──
+            probs = state.probabilities
+            live_state_dict = {
+                'datetime':      str(state.datetime),
+                'symbol':        symbol,
+                'close':         round(state.close, 5),
+                'reference':     round(state.reference, 5),
+                'sigma':         round(state.sigma, 5),
+                'z_score':       round(state.z_score, 4),
+                'z_velocity':    round(state.z_velocity, 4),
+                'zone':          state.zone,
+                'trend_bin':     state.context.get('trend_bin', ''),
+                'volume_bin':    state.context.get('volume_bin', ''),
+                'time_bin':      state.context.get('time_bin', ''),
+                'p_mr':          round(probs.get('MR', {}).get('prob', 0), 4) if isinstance(probs.get('MR'), dict) else 0,
+                'p_cont':        round(probs.get('CONT', {}).get('prob', 0), 4) if isinstance(probs.get('CONT'), dict) else 0,
+                'edge_gap':      round(probs.get('edge_gap', 0), 4),
+                'signal_type':   sig.signal_type,
+                'signal_state':  signal_state,
+                'session_bar':   state.session_bar_count,
+                'band_1p':       round(state.bands.get('1+', 0), 5),
+                'band_1n':       round(state.bands.get('1-', 0), 5),
+                'band_2p':       round(state.bands.get('2+', 0), 5),
+                'band_2n':       round(state.bands.get('2-', 0), 5),
+                'band_3p':       round(state.bands.get('3+', 0), 5),
+                'band_3n':       round(state.bands.get('3-', 0), 5),
+            }
+            with open(output_path, 'w') as f:
+                json.dump(live_state_dict, f, indent=2)
+
+            if alert:
+                print(alert)
+
+            if on_state_update:
+                on_state_update(copy.copy(state), sig)
+
+    except KeyboardInterrupt:
+        print("\n🔴 Live mode stopped")
