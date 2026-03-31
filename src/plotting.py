@@ -2,8 +2,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.gridspec as gridspec
 import pandas as pd
+import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
 
-from src.zones import ZONE_COLORS
+from src.zones import ZONE_COLORS, ZONE_LABELS
 
 
 def plot_band_overlay(results: pd.DataFrame, config: dict,
@@ -105,3 +107,53 @@ def plot_band_overlay(results: pd.DataFrame, config: dict,
     plt.savefig('band_overlay.png', dpi=150, bbox_inches='tight')
     plt.show()
     print("✅ Chart saved to band_overlay.png")
+
+
+# Heat-Map
+def plot_probability_heatmap(prob_table: pd.DataFrame,
+                             outcome: str = 'MR',
+                             context_col: str = None) -> None:
+    """
+    Plot a heatmap of outcome probabilities per zone.
+
+    Parameters
+    ----------
+    prob_table  : calibrated probability table
+    outcome     : 'MR', 'CONT', or 'NEU'
+    context_col : optional context column to split heatmap rows by
+    """
+    subset = prob_table[prob_table['outcome'] == outcome].copy()
+
+    if context_col and context_col in subset.columns:
+        pivot = subset.pivot(index=context_col, columns='zone', values='prob')
+        pivot = pivot.reindex(columns=[z for z in ZONE_LABELS if z in pivot.columns])
+        ylabel = context_col
+    else:
+        pivot = subset.set_index('zone')['prob'].reindex(ZONE_LABELS).to_frame().T
+        pivot.index = [outcome]
+        ylabel = 'Outcome'
+
+    fig, ax = plt.subplots(figsize=(12, max(3, len(pivot) * 1.2)))
+    cmap = LinearSegmentedColormap.from_list('rg', ['#F44336', '#FFEB3B', '#4CAF50'])
+    im = ax.imshow(pivot.values.astype(float), cmap=cmap, aspect='auto',
+                   vmin=0, vmax=1)
+
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels(pivot.columns, fontsize=11)
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels(pivot.index, fontsize=11)
+    ax.set_ylabel(ylabel)
+    ax.set_title(f'P({outcome}) by Zone{" × " + context_col if context_col else ""}',
+                 fontsize=13, fontweight='bold')
+
+    for i in range(len(pivot.index)):
+        for j in range(len(pivot.columns)):
+            val = pivot.values[i, j]
+            if not np.isnan(val):
+                ax.text(j, i, f'{val:.1%}', ha='center', va='center',
+                        fontsize=10, fontweight='bold',
+                        color='white' if val < 0.35 or val > 0.65 else 'black')
+
+    plt.colorbar(im, ax=ax, label='Probability', shrink=0.8)
+    plt.tight_layout()
+    plt.show()
