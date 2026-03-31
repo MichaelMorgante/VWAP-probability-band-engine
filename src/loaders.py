@@ -1,4 +1,6 @@
 import pandas as pd
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 def _normalise(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -109,6 +111,110 @@ def load_mt5_live(symbol: str, timeframe_mt5, n_bars: int = 500) -> pd.DataFrame
     df['datetime'] = pd.to_datetime(df['datetime'], unit='s', utc=True)
     print(f"✅ MT5 Live loaded: {len(df):,} bars for {symbol}")
     return _normalise(df)
+
+def fetch_mt5_history(symbol: str,
+                      timeframe_mt5,
+                      lookback_days: int = 30,
+                      save_csv: bool = False,
+                      csv_dir: str = "data",
+                      csv_filename: str = None) -> pd.DataFrame:
+    """
+    Fetch historical bars directly from MT5, normalise them to the project schema,
+    and optionally save them to a CSV for later reuse.
+
+    Parameters
+    ----------
+    symbol        : MT5 symbol string e.g. 'US100.cash'
+    timeframe_mt5 : MT5 timeframe constant e.g. mt5.TIMEFRAME_M1
+    lookback_days : number of calendar days to fetch
+    save_csv      : if True, save a local CSV copy
+    csv_dir       : output directory for saved CSV
+    csv_filename  : optional custom CSV filename
+
+    Returns
+    -------
+    pd.DataFrame in the same normalised schema as the other loaders
+    """
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        raise ImportError("MetaTrader5 package not installed. Run: pip install MetaTrader5")
+
+    # ── Connect ──────────────────────────────────────────────────────
+    mt5.shutdown()
+    if not mt5.initialize():
+        raise RuntimeError(
+            f"MT5 initialize() failed — {mt5.last_error()}\n"
+            "Make sure MT5 is open, logged in, and Algo Trading is enabled.\n"
+            "Tools → Options → Expert Advisors → tick 'Allow algorithmic trading'"
+        )
+
+    print(f"✅ MT5 connected — {mt5.terminal_info().name}")
+    print(f"   Account : {mt5.account_info().login} | Server: {mt5.account_info().server}")
+
+    # ── Symbol check ─────────────────────────────────────────────────
+    if mt5.symbol_info(symbol) is None:
+        candidates = [s.name for s in mt5.symbols_get()
+                      if any(x in s.name.upper() for x in ['US1', 'NAS', 'TECH', 'NDX', 'USTEC'])]
+        mt5.shutdown()
+        raise RuntimeError(
+            f"Symbol '{symbol}' not found on this broker.\n"
+            f"Possible matches: {candidates[:20]}\n"
+            "Update CONFIG['instrument'] to the correct name and retry."
+        )
+
+    mt5.symbol_select(symbol, True)
+
+    # ── Fetch bars ───────────────────────────────────────────────────
+    utc_now = datetime.now(timezone.utc)
+    utc_from = utc_now - timedelta(days=lookback_days)
+
+    rates = mt5.copy_rates_range(symbol, timeframe_mt5, utc_from, utc_now)
+
+    if rates is None or len(rates) == 0:
+        mt5.shutdown()
+        raise RuntimeError(
+            f"copy_rates_range returned nothing — {mt5.last_error()}\n"
+            "The market may be closed or the symbol may have no data in this window."
+        )
+
+    print(f"✅ Raw bars fetched : {len(rates):,}  (~{lookback_days} trading days)")
+
+    # ── Normalise to project schema ──────────────────────────────────
+    raw = pd.DataFrame(rates)
+    raw = raw.rename(columns={'time': 'datetime'})
+    raw['datetime'] = pd.to_datetime(raw['datetime'], unit='s', utc=True)
+
+    keep = ['datetime', 'open', 'high', 'low', 'close', 'tick_volume']
+    raw = raw[[c for c in keep if c in raw.columns]]
+
+    if 'tick_volume' not in raw.columns:
+        raw['tick_volume'] = 1.0
+        print("⚠️  No tick_volume column — using constant 1.0")
+
+    df = _normalise(raw)
+
+    # ── Optional CSV save ────────────────────────────────────────────
+    if save_csv:
+        out_dir = Path(csv_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        if csv_filename is None:
+            safe_symbol = symbol.replace('.', '_')
+            csv_filename = f"{safe_symbol}_{lookback_days}d.csv"
+
+        csv_path = out_dir / csv_filename
+
+        save_df = df.copy()
+        save_df['datetime'] = save_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        save_df.drop(columns=['typical_price', 'session_date'], errors='ignore').to_csv(csv_path, index=False)
+
+        print(f"✅ CSV saved → {csv_path}  ({csv_path.stat().st_size/1024/1024:.1f} MB)")
+
+    mt5.shutdown()
+    print("✅ MT5 connection closed")
+
+    return df
 
 
 # ──────────────────────────────────────────────────────────────
