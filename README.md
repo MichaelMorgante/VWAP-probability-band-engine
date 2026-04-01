@@ -30,8 +30,6 @@ This project does **not** solve the full optimal execution problem from stochast
 
 ## Project Overview
 
-![alt text](image.png)
-
 $$
 \mathrm{Band}_{k,\pm}(t) = \mathrm{Reference}_t \pm k\sigma_t,
 \qquad k \in \{1,2,3\}.
