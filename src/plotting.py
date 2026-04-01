@@ -154,8 +154,26 @@ def plot_probability_heatmap(prob_table: pd.DataFrame,
     ax.set_yticks(range(len(pivot.index)))
     ax.set_yticklabels(pivot.index, fontsize=11)
     ax.set_ylabel(ylabel)
-    ax.set_title(f'P({outcome}) by Zone{" × " + context_col if context_col else ""}',
-                 fontsize=13, fontweight='bold')
+
+    pretty_outcome = {
+        'MR': 'Mean-Reversion',
+        'CONT': 'Continuation',
+        'NEU': 'Neutral'
+    }.get(outcome, outcome)
+
+    pretty_context = {
+        'trend_bin': 'Trend Regime',
+        'volume_bin': 'Volume Regime',
+        'time_bin': 'Time of Day',
+        'z_velocity_bin': 'Z-Score Velocity'
+    }.get(context_col, context_col)
+
+    if context_col:
+        title = f'{pretty_outcome} Probability by Zone and {pretty_context}'
+    else:
+        title = f'{pretty_outcome} Probability by Zone'
+
+    ax.set_title(title, fontsize=13, fontweight='bold')
 
     for i in range(len(pivot.index)):
         for j in range(len(pivot.columns)):
@@ -168,10 +186,16 @@ def plot_probability_heatmap(prob_table: pd.DataFrame,
     plt.colorbar(im, ax=ax, label='Probability', shrink=0.8)
 
     if filename is None:
+        outcome_name = {
+            'MR': 'mr',
+            'CONT': 'continuation',
+            'NEU': 'neutral'
+        }.get(outcome, outcome.lower())
+
         if context_col:
-            filename = f"probability_heatmap_{outcome.lower()}_{context_col}.png"
+            filename = f"{outcome_name}_probability_by_zone_and_{context_col}.png"
         else:
-            filename = f"probability_heatmap_{outcome.lower()}.png"
+            filename = f"{outcome_name}_probability_by_zone.png"
 
     save_path = PLOTS_DIR / filename
 
