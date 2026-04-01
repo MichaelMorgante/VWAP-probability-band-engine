@@ -33,8 +33,10 @@ $$
 where the typical price is
 
 $$
-P_i^{\mathrm{typical}} = \frac{H_i + L_i + C_i}{3}.
+P_i^{\mathrm{typical}} = \frac{H_i + L_i + C_i}{3},
 $$
+
+where $H_i$, $L_i$, and $C_i$ denote the high, low, and close of bar $i$.
 
 This is the discrete-time analogue of the continuous-time VWAP benchmark, with the summation taken over observed bars from the session open up to time $t$.
 
