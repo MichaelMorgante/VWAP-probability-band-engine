@@ -30,30 +30,7 @@ This project does **not** solve the full optimal execution problem from stochast
 
 ## Project Overview
 
-For each intraday bar, the engine computes a session-aware reference line, usually VWAP, in the discrete-time form
-
-$$
-\mathrm{VWAP}_t
-=
-\frac{\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}} V_i}
-     {\sum_{i=\mathrm{open}}^{t} V_i}
-$$
-
-with
-
-$$
-P_i^{\mathrm{typical}} = \frac{H_i + L_i + C_i}{3}.
-$$
-
-If volume is unavailable or unreliable, a TWAP-style fallback is used:
-
-$$
-\mathrm{TWAP}_t
-=
-\frac{1}{t}\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}}.
-$$
-
-Around this reference, the engine estimates volatility and constructs sigma bands:
+![alt text](image.png)
 
 $$
 \mathrm{Band}_{k,\pm}(t) = \mathrm{Reference}_t \pm k\sigma_t,
