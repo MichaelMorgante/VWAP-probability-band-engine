@@ -1,17 +1,22 @@
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 CONFIG = {
     # Data source
-    'csv_path': 'data/historical/US100_cash_M1_NY_session_30d.csv',
+    'data_dir': PROJECT_ROOT / 'data' / 'historical',
+    'csv_filename': 'US100_cash_M1_NY_session_30d.csv',
     'instrument': 'US100.cash',
     'timeframe': 'M1',
 
-     # Trading sessions (UTC hours) - all 4 major sessions
+    # Trading sessions (UTC hours) - all 4 major sessions
     'sessions': {
         'Sydney':  {'open_utc': 21, 'close_utc': 24},
         'Asian':   {'open_utc':  0, 'close_utc':  8},
         'London':  {'open_utc':  8, 'close_utc': 13},
         'NewYork': {'open_utc': 13, 'close_utc': 21},
     },
-    'session_open_hour':  0,
+    'session_open_hour': 0,
     'session_close_hour': 24,
 
     # VWAP / mean reference
@@ -64,15 +69,15 @@ CONFIG = {
     # to produce an actionable signal
     'edge_gap_threshold': 0.10,
 
-    # ── PHASE 3: Train/test split ────────────────────────────────────
+    # ── PHASE 3: Train/test split ───────────────────────────────────
     # Fraction of data used for calibration (must be by date, not random)
     'calibration_frac': 0.60,
-    'validation_frac':  0.20,
+    'validation_frac': 0.20,
     # test_frac is implicitly 1 - calibration_frac - validation_frac = 0.20
 
     # Walk-forward settings
     'wf_calibration_days': 60,   # rolling calibration window in days
-    'wf_oos_days':         10,   # out-of-sample window per fold
+    'wf_oos_days': 10,           # out-of-sample window per fold
 
     # Session warmup: suppress signals for this many bars after VWAP reset
     'session_warmup_bars': 20,
