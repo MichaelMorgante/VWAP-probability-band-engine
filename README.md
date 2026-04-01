@@ -6,7 +6,7 @@ Intraday VWAP probability band engine for backtesting, replay analysis, and live
 
 This project studies how intraday price behaves relative to a session-reset reference line, usually VWAP, and whether deviations from that reference historically tend to mean-revert, continue, or remain neutral. It combines intraday data loading, VWAP / sigma band construction, z-score normalisation, empirical probability calibration, filtered signal generation, replay stepping, and live MT5 monitoring in one structured Python repository.
 
-The benchmark motivation comes from lecture material on TWAP and VWAP in stochastic control and algorithmic trading at King’s College London. The theoretical benchmark framing is continuous-time, but the engine implemented here is **discrete-time** and runs bar by bar on intraday candles. The lecture notes motivate the move from TWAP to VWAP as a more meaningful execution benchmark when market volume matters. :contentReference[oaicite:0]{index=0}
+The benchmark motivation comes from lecture material on TWAP and VWAP in stochastic control and algorithmic trading at King’s College London. The theoretical benchmark framing is continuous-time, but the engine implemented here is **discrete-time** and runs bar by bar on intraday candles. The lecture notes motivate the move from TWAP to VWAP as a more meaningful execution benchmark when market volume matters.
 
 In continuous time,
 
@@ -22,6 +22,35 @@ $$
 
 where $S_t$ is price and $V_t$ is market volume or order-flow intensity.
 
+Although the benchmark motivation is naturally introduced in continuous time, the engine in this repository is implemented in **discrete time** on intraday candles. In practice, the reference line is updated bar by bar within each session.
+
+For a session-reset VWAP, the implemented form is
+
+$$
+\mathrm{VWAP}_t
+=
+\frac{\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}} V_i}
+     {\sum_{i=\mathrm{open}}^{t} V_i},
+$$
+
+where the typical price is
+
+$$
+P_i^{\mathrm{typical}} = \frac{H_i + L_i + C_i}{3}.
+$$
+
+This is the discrete-time analogue of the continuous-time VWAP benchmark, with the summation taken over observed bars from the session open up to time $t$.
+
+When volume is unavailable or unreliable, the engine can instead use a TWAP-style fallback:
+
+$$
+\mathrm{TWAP}_t
+=
+\frac{1}{t}\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}}.
+$$
+
+So while the lecture-theory framing begins with integrals, the code in this project works entirely with cumulative summations and recursive bar-by-bar updates. This discrete formulation is what drives the reference line, sigma bands, z-scores, and live state transitions throughout the repository.
+
 This project does **not** solve the full optimal execution problem from stochastic control. Instead, it uses VWAP as an intraday reference line, builds volatility bands around it, and studies whether deviations from that reference historically tend to:
 
 1. revert back toward the mean,
@@ -29,6 +58,10 @@ This project does **not** solve the full optimal execution problem from stochast
 3. do neither clearly.
 
 ## Project Overview
+
+Starting from the session reference line, the engine estimates an intraday volatility scale and builds probability bands around that reference. These bands convert raw price distance into a standardised state representation that can be compared across bars, sessions, and instruments.
+
+The sigma-band structure is
 
 $$
 \mathrm{Band}_{k,\pm}(t) = \mathrm{Reference}_t \pm k\sigma_t,
