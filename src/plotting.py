@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.gridspec as gridspec
@@ -7,18 +9,24 @@ from matplotlib.colors import LinearSegmentedColormap
 
 from src.zones import ZONE_COLORS, ZONE_LABELS
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PLOTS_DIR = PROJECT_ROOT / "artifacts" / "plots"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def plot_band_overlay(results: pd.DataFrame, config: dict,
-                      n_bars: int = None, title: str = None) -> None:
+                      n_bars: int = None, title: str = None,
+                      filename: str = "band_overlay.png") -> None:
     """
     Plot VWAP sigma band overlay with zone probabilities.
 
     Parameters
     ----------
-    results : output DataFrame from run_backtest()
-    config  : CONFIG dictionary
-    n_bars  : number of recent bars to display (None = all)
-    title   : plot title override
+    results  : output DataFrame from run_backtest()
+    config   : CONFIG dictionary
+    n_bars   : number of recent bars to display (None = all)
+    title    : plot title override
+    filename : output filename saved into artifacts/plots/
     """
     n_bars = n_bars or config.get('plot_last_n_bars')
     plot_df = results.tail(n_bars).reset_index(drop=True)
@@ -103,16 +111,18 @@ def plot_band_overlay(results: pd.DataFrame, config: dict,
                ['  Zones:'] + list(ZONE_COLORS.keys()),
                loc='upper left', fontsize=8, ncol=6)
 
-    plt.tight_layout()
-    plt.savefig('band_overlay.png', dpi=150, bbox_inches='tight')
-    plt.show()
-    print("✅ Chart saved to band_overlay.png")
+    save_path = PLOTS_DIR / filename
 
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f"✅ Chart saved to {save_path}")
 
 # Heat-Map
 def plot_probability_heatmap(prob_table: pd.DataFrame,
                              outcome: str = 'MR',
-                             context_col: str = None) -> None:
+                             context_col: str = None,
+                             filename: str = None) -> None:
     """
     Plot a heatmap of outcome probabilities per zone.
 
@@ -121,6 +131,7 @@ def plot_probability_heatmap(prob_table: pd.DataFrame,
     prob_table  : calibrated probability table
     outcome     : 'MR', 'CONT', or 'NEU'
     context_col : optional context column to split heatmap rows by
+    filename    : optional output filename saved into artifacts/plots/
     """
     subset = prob_table[prob_table['outcome'] == outcome].copy()
 
@@ -155,5 +166,16 @@ def plot_probability_heatmap(prob_table: pd.DataFrame,
                         color='white' if val < 0.35 or val > 0.65 else 'black')
 
     plt.colorbar(im, ax=ax, label='Probability', shrink=0.8)
+
+    if filename is None:
+        if context_col:
+            filename = f"probability_heatmap_{outcome.lower()}_{context_col}.png"
+        else:
+            filename = f"probability_heatmap_{outcome.lower()}.png"
+
+    save_path = PLOTS_DIR / filename
+
     plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.show()
+    print(f"✅ Heatmap saved to {save_path}")
