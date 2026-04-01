@@ -1,6 +1,8 @@
+from pathlib import Path
 import json
 import os
-from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def save_artifacts(prob_table,
@@ -12,7 +14,7 @@ def save_artifacts(prob_table,
                    df_tst=None,
                    wf_log=None,
                    artifacts_dir: str = 'artifacts') -> None:
-    artifacts_path = Path(artifacts_dir)
+    artifacts_path = PROJECT_ROOT / artifacts_dir
     artifacts_path.mkdir(exist_ok=True)
 
     tables_path = artifacts_path / 'tables'
@@ -74,7 +76,7 @@ def export_live_artifacts(prob_table,
     """
     Export minimal live artifacts for MT5 / live notebook use.
     """
-    export_path = Path(export_dir)
+    export_path = PROJECT_ROOT / export_dir
     export_path.mkdir(parents=True, exist_ok=True)
 
     exports_path = export_path / "exports"

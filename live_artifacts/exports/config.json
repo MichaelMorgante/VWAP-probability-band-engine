@@ -1,0 +1,56 @@
+{
+  "data_dir": "C:\\Users\\k2587979\\Documents\\GitHub Projects\\VWAP-probability-band-engine\\VWAP-probability-band-engine\\data\\historical",
+  "csv_filename": "US100_cash_M1_NY_session_30d.csv",
+  "instrument": "US100.cash",
+  "timeframe": "M1",
+  "sessions": {
+    "Sydney": {
+      "open_utc": 21,
+      "close_utc": 24
+    },
+    "Asian": {
+      "open_utc": 0,
+      "close_utc": 8
+    },
+    "London": {
+      "open_utc": 8,
+      "close_utc": 13
+    },
+    "NewYork": {
+      "open_utc": 13,
+      "close_utc": 21
+    }
+  },
+  "session_open_hour": 0,
+  "session_close_hour": 24,
+  "reference_type": "VWAP",
+  "ema_span": 60,
+  "ewma_halflife": 15,
+  "rolling_window": 30,
+  "vol_method": "ewma",
+  "zone_thresholds": [
+    0.5,
+    1.0,
+    2.0
+  ],
+  "outcome_horizon_bars": 12,
+  "mr_threshold": 0.3,
+  "cont_threshold": 0.5,
+  "slope_lookback": 20,
+  "volume_ema_span": 20,
+  "min_sample_count": 100,
+  "replay_speed": 50.0,
+  "plot_last_n_bars": 180,
+  "spread_cost": 0.8,
+  "mae_stop_zscore": 1.5,
+  "min_profit_zscore": 0.2,
+  "shrinkage_k": 30,
+  "min_conditioned_n": 10,
+  "edge_gap_threshold": 0.1,
+  "calibration_frac": 0.6,
+  "validation_frac": 0.2,
+  "wf_calibration_days": 60,
+  "wf_oos_days": 10,
+  "session_warmup_bars": 20,
+  "min_signal_zscore": 0.8
+}
