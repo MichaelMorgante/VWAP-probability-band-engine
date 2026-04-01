@@ -27,10 +27,7 @@ Although the benchmark motivation is naturally introduced in continuous time, th
 For a session-reset VWAP, the implemented form is
 
 $$
-\mathrm{VWAP}_t
-=
-\frac{\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}} V_i}
-     {\sum_{i=\mathrm{open}}^{t} V_i},
+\mathrm{VWAP}_t = \frac{\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}} V_i}{\sum_{i=\mathrm{open}}^{t} V_i},
 $$
 
 where the typical price is
@@ -44,9 +41,7 @@ This is the discrete-time analogue of the continuous-time VWAP benchmark, with t
 When volume is unavailable or unreliable, the engine can instead use a TWAP-style fallback:
 
 $$
-\mathrm{TWAP}_t
-=
-\frac{1}{t}\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}}.
+\mathrm{TWAP}_t = \frac{1}{t}\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}}.
 $$
 
 So while the lecture-theory framing begins with integrals, the code in this project works entirely with cumulative summations and recursive bar-by-bar updates. This discrete formulation is what drives the reference line, sigma bands, z-scores, and live state transitions throughout the repository.
