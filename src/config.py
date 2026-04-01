@@ -1,6 +1,6 @@
 CONFIG = {
     # Data source
-    'csv_path': 'data/US100_cash_M1_NY_session_30d.csv',
+    'csv_path': 'data/historical/US100_cash_M1_NY_session_30d.csv',
     'instrument': 'US100.cash',
     'timeframe': 'M1',
 
