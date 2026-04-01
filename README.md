@@ -213,3 +213,8 @@ VWAP-probability-band-engine/
 ├── tests/
 ├── README.md
 └── requirements.txt
+
+## License
+
+This repository is provided under an **All Rights Reserved** license. No use, copying, modification, distribution, or derivative works are permitted without prior written permission.
+See the [LICENSE](LICENSE) file for details.
