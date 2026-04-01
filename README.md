@@ -4,56 +4,82 @@ Intraday VWAP probability band engine for backtesting, replay analysis, and live
 
 ## Intraday VWAP Probability Bands Under Discrete-Time Market Data
 
-This project studies how intraday price behaves relative to a session-reset reference line, usually VWAP, and whether deviations from that reference historically tend to mean-revert, continue, or remain neutral. It combines intraday data loading, VWAP / sigma band construction, z-score normalisation, empirical probability calibration, filtered signal generation, replay stepping, and live MT5 state updates in one structured Python repository.
+This project studies how intraday price behaves relative to a session-reset reference line, usually VWAP, and whether deviations from that reference historically tend to mean-revert, continue, or remain neutral. It combines intraday data loading, VWAP / sigma band construction, z-score normalisation, empirical probability calibration, filtered signal generation, replay stepping, and live MT5 monitoring in one structured Python repository.
 
-The repository is not just a plotting tool. It is a reusable intraday engine that converts price deviation from VWAP into a probabilistic state space, then uses that state to support research, replay inspection, and live monitoring.
+The benchmark motivation comes from lecture material on TWAP and VWAP in stochastic control and algorithmic trading at King’s College London. The theoretical benchmark framing is continuous-time, but the engine implemented here is **discrete-time** and runs bar by bar on intraday candles. The lecture notes motivate the move from TWAP to VWAP as a more meaningful execution benchmark when market volume matters. :contentReference[oaicite:0]{index=0}
 
-The benchmark motivation comes from algorithmic trading / stochastic control lecture material on TWAP and VWAP, where VWAP is treated as a more meaningful benchmark than TWAP when market volume matters. In continuous-time notation,
+In continuous time,
 
-`TWAP = (1 / T) ∫_0^T S_t dt`
+$$
+\mathrm{TWAP} = \frac{1}{T}\int_0^T S_t\,dt
+$$
 
 and
 
-`VWAP = (∫_0^T V_t S_t dt) / (∫_0^T V_t dt)`
+$$
+\mathrm{VWAP} = \frac{\int_0^T V_t S_t\,dt}{\int_0^T V_t\,dt},
+$$
 
-where `S_t` is price and `V_t` is market volume or order-flow intensity. Lecture 10 explicitly motivates the move from TWAP to VWAP as a more informative execution benchmark. :contentReference[oaicite:0]{index=0}
+where $S_t$ is price and $V_t$ is market volume or order-flow intensity.
 
-This project, however, is implemented in **discrete time**, not continuous time. The engine operates bar by bar on intraday candles, so all references, volatility bands, z-scores, and context features are computed using summation and recursive updates rather than continuous-time integrals.
+This project does **not** solve the full optimal execution problem from stochastic control. Instead, it uses VWAP as an intraday reference line, builds volatility bands around it, and studies whether deviations from that reference historically tend to:
+
+1. revert back toward the mean,
+2. continue further in the same direction, or
+3. do neither clearly.
 
 ## Project Overview
 
 For each intraday bar, the engine computes a session-aware reference line, usually VWAP, in the discrete-time form
 
-`VWAP_t = [Σ_{i=open}^t P_i^typical V_i] / [Σ_{i=open}^t V_i]`
+$$
+\mathrm{VWAP}_t
+=
+\frac{\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}} V_i}
+     {\sum_{i=\mathrm{open}}^{t} V_i}
+$$
 
 with
 
-`P_i^typical = (H_i + L_i + C_i) / 3`
+$$
+P_i^{\mathrm{typical}} = \frac{H_i + L_i + C_i}{3}.
+$$
 
 If volume is unavailable or unreliable, a TWAP-style fallback is used:
 
-`TWAP_t = (1 / t) Σ_{i=open}^t P_i^typical`
+$$
+\mathrm{TWAP}_t
+=
+\frac{1}{t}\sum_{i=\mathrm{open}}^{t} P_i^{\mathrm{typical}}.
+$$
 
 Around this reference, the engine estimates volatility and constructs sigma bands:
 
-`Band_{k,±}(t) = Reference_t ± kσ_t,   k ∈ {1,2,3}`
+$$
+\mathrm{Band}_{k,\pm}(t) = \mathrm{Reference}_t \pm k\sigma_t,
+\qquad k \in \{1,2,3\}.
+$$
 
 The price deviation is then normalised into a dimensionless z-score:
 
-`z_t = (C_t - Reference_t) / σ_t`
+$$
+z_t = \frac{C_t - \mathrm{Reference}_t}{\sigma_t}.
+$$
 
 This turns raw price behaviour into an instrument-agnostic state representation. The z-score is discretised into zones such as `Z3-`, `Z2-`, `Z1-`, `Z0`, `Z1+`, `Z2+`, `Z3+`, and these zones are combined with contextual features such as trend, volume regime, time-of-day, and z-score velocity.
 
 Historical data is then used to estimate empirical probabilities of the form
 
-`P(Outcome | Zone, Context)`
+$$
+P(\mathrm{Outcome}\mid \mathrm{Zone}, \mathrm{Context}),
+$$
 
 where the outcome is one of:
 - mean reversion (`MR`)
 - continuation (`CONT`)
 - neutral (`NEU`)
 
-The project then studies how these probabilities can be used to generate and filter live intraday trading signals.
+The project then studies how these probabilities can be converted into filtered trading signals for replay and live monitoring.
 
 ## Key Questions
 
@@ -66,19 +92,27 @@ This repository investigates the following core questions:
 
 ## What the Engine Does
 
-The project is built around six main layers:
+The project is built around six main layers.
 
 ### 1. Reference-line construction
 The engine computes an intraday mean reference line, usually VWAP, with session reset logic.
 
 ### 2. Volatility and sigma bands
-It estimates a volatility scale around that reference and constructs ±1σ, ±2σ, and ±3σ bands.
+It estimates a volatility scale around the reference line and constructs $\pm 1\sigma$, $\pm 2\sigma$, and $\pm 3\sigma$ bands.
+
+For the EWMA-style update, the variance recursion takes the form
+
+$$
+\sigma_t^2 = (1-\lambda)r_t^2 + \lambda \sigma_{t-1}^2,
+$$
+
+where $r_t$ is deviation from the reference rather than raw close-to-close return.
 
 ### 3. Z-score and zone classification
 It converts price deviation into z-scores and discrete extension zones.
 
 ### 4. Context modelling
-It computes regime-like context features such as:
+It computes contextual regime features such as:
 - trend direction,
 - volume regime,
 - time-of-day bucket,
@@ -98,8 +132,8 @@ It produces typed signals such as:
 and filters them using:
 - edge-gap thresholds,
 - session warmup,
-- minimum |z|,
-- allowed zones,
+- minimum $|z|$,
+- accepted zones,
 - regime compatibility,
 - time-of-day filters.
 
@@ -122,7 +156,7 @@ It:
 ### `replay_tradingview.ipynb`
 Replay notebook.
 
-It steps through historical data one bar at a time with no look-ahead, simulating the information state that would have been available at bar `t`.
+It steps through historical data one bar at a time with no look-ahead, simulating the information state that would have been available at bar $t$.
 
 ### `live_trading.ipynb`
 Live MT5 notebook.
