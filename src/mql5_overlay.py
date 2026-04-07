@@ -636,27 +636,3 @@ void DrawSignalText()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(mql5_code.strip(), encoding="utf-8")
     return output_path
-
-
-def find_mt5_indicators_dir():
-    appdata = os.environ.get('APPDATA', '')
-    candidates = glob.glob(os.path.join(appdata, 'MetaQuotes', 'Terminal', '*', 'MQL5', 'Indicators'))
-    if candidates:
-        return candidates[0]
-
-    for base in [r'C:/Program Files/MetaTrader 5', r'C:/Program Files (x86)/MetaTrader 5']:
-        p = os.path.join(base, 'MQL5', 'Indicators')
-        if os.path.isdir(p):
-            return p
-
-    return None
-
-
-def copy_mql5_overlay_to_mt5(source_path: Path) -> Path | None:
-    mt5_ind_dir = find_mt5_indicators_dir()
-    if not mt5_ind_dir:
-        return None
-
-    dest = Path(mt5_ind_dir) / source_path.name
-    shutil.copy2(source_path, dest)
-    return dest
