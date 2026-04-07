@@ -1,4 +1,5 @@
 import copy
+import os
 import json
 import time
 from pathlib import Path
@@ -87,8 +88,19 @@ def write_live_context(
         'points': points,
     }
 
-    with open(output_path, 'w') as f:
-        json.dump(payload, f, indent=2)
+    tmp_path = output_path.with_suffix('.tmp')
+
+    for attempt in range(5):
+        try:
+            with open(tmp_path, 'w') as f:
+               json.dump(payload, f, indent=2)
+
+            os.replace(tmp_path, output_path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2)
 
     print(f"✅ Context written: {output_path} ({len(points)} points)")
 
@@ -420,8 +432,19 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
                 'band_3n':       round(state.bands.get('3-', 0), 5),
             }
 
-            with open(output_path, 'w') as f:
-                json.dump(live_state_dict, f, indent=2)
+            tmp_state_path = output_path.with_suffix('.tmp')
+
+            for attempt in range(5):
+                try:
+                    with open(tmp_state_path, 'w') as f:
+                        json.dump(live_state_dict, f, indent=2)
+
+                    os.replace(tmp_state_path, output_path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.2)
 
             # ── Context VWAP trail output (bendy overlay) ──
             write_live_context(
