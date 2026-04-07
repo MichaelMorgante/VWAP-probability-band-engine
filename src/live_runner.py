@@ -382,10 +382,13 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
             # ── Append new bar to rolling live buffer ──
             warmup_df = pd.concat([warmup_df, pd.DataFrame([bar])], ignore_index=True)
 
+            # ── Context overlay: keep a longer rolling buffer for smoother bendy trail ──
+            context_export_points = 120
+
             keep_bars = max(
                 config.get('context_vwap_window', 60),
                 config.get('context_sigma_window', 30)
-            ) + 60
+            ) + context_export_points + 20
 
             warmup_df = warmup_df.tail(keep_bars).copy()
 
@@ -426,7 +429,7 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
                 warmup_df,
                 config,
                 output_dir=output_path.parent,
-                n_points=50
+                n_points=context_export_points
             )
 
             if alert:
