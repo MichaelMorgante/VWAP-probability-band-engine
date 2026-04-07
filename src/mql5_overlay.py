@@ -211,12 +211,14 @@ void DrawOverlay()
 def write_mql5_double_overlay(output_path: str = "live_artifacts/VWAP_Overlay.mq5") -> Path:
     mql5_code = r'''
 //+------------------------------------------------------------------+
-//| VWAP Double Overlay                                              |
-//| Reads live_state.json + live_context.json                        |
-//| Straight execution lines + bendy context trail                   |
+//| VWAP Double Overlay - Phase B                                    |
+//| Straight execution lines from live_state.json                    |
+//| Bendy context bands + faint fills from live_context.json         |
 //+------------------------------------------------------------------+
+#property strict
 #property indicator_chart_window
-#property indicator_plots 0
+#property indicator_buffers 13
+#property indicator_plots   10
 
 input string JsonPathState   = "live_state.json";
 input string JsonPathContext = "live_context.json";
@@ -231,15 +233,35 @@ input color ColorBand1 = clrLimeGreen;
 input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
 
-// Context colours
+// Context line colours
 input color ColorCtxRef = clrMediumPurple;
 input color ColorCtx1   = clrTurquoise;
 input color ColorCtx2   = clrOrchid;
 input color ColorCtx3   = clrSlateBlue;
 
+// Context fill colours
+input color ColorFill1 = clrPaleTurquoise;
+input color ColorFill2 = clrThistle;
+input color ColorFill3 = clrLavender;
+
 // Signal colours
 input color ColorSignalMR   = clrLimeGreen;
 input color ColorSignalCont = clrOrangeRed;
+
+// Buffers
+double BufFill1U[];
+double BufFill1L[];
+double BufFill2U[];
+double BufFill2L[];
+double BufFill3U[];
+double BufFill3L[];
+double BufCtxRef[];
+double BufCtx1P[];
+double BufCtx1N[];
+double BufCtx2P[];
+double BufCtx2N[];
+double BufCtx3P[];
+double BufCtx3N[];
 
 // Straight execution state
 double g_reference = 0, g_sigma = 0, g_z_score = 0;
@@ -249,39 +271,136 @@ double g_band1p = 0, g_band1n = 0;
 double g_band2p = 0, g_band2n = 0;
 double g_band3p = 0, g_band3n = 0;
 
-// Context arrays
-#define MAX_CTX_POINTS 100
-int      g_ctx_count = 0;
-datetime g_ctx_time[MAX_CTX_POINTS];
-double   g_ctx_ref[MAX_CTX_POINTS];
-double   g_ctx_1p[MAX_CTX_POINTS];
-double   g_ctx_1n[MAX_CTX_POINTS];
-double   g_ctx_2p[MAX_CTX_POINTS];
-double   g_ctx_2n[MAX_CTX_POINTS];
-double   g_ctx_3p[MAX_CTX_POINTS];
-double   g_ctx_3n[MAX_CTX_POINTS];
+// Context arrays from JSON
+#define MAX_CTX_POINTS 300
+int    g_ctx_count = 0;
+double g_ctx_ref[MAX_CTX_POINTS];
+double g_ctx_1p[MAX_CTX_POINTS];
+double g_ctx_1n[MAX_CTX_POINTS];
+double g_ctx_2p[MAX_CTX_POINTS];
+double g_ctx_2n[MAX_CTX_POINTS];
+double g_ctx_3p[MAX_CTX_POINTS];
+double g_ctx_3n[MAX_CTX_POINTS];
 
+//+------------------------------------------------------------------+
 int OnInit()
   {
-   EventSetTimer(5);
+   // Plot 0: Fill 1
+   SetIndexBuffer(0, BufFill1U, INDICATOR_DATA);
+   SetIndexBuffer(1, BufFill1L, INDICATOR_DATA);
+
+   // Plot 1: Fill 2
+   SetIndexBuffer(2, BufFill2U, INDICATOR_DATA);
+   SetIndexBuffer(3, BufFill2L, INDICATOR_DATA);
+
+   // Plot 2: Fill 3
+   SetIndexBuffer(4, BufFill3U, INDICATOR_DATA);
+   SetIndexBuffer(5, BufFill3L, INDICATOR_DATA);
+
+   // Plot 3..9: lines
+   SetIndexBuffer(6,  BufCtxRef, INDICATOR_DATA);
+   SetIndexBuffer(7,  BufCtx1P,  INDICATOR_DATA);
+   SetIndexBuffer(8,  BufCtx1N,  INDICATOR_DATA);
+   SetIndexBuffer(9,  BufCtx2P,  INDICATOR_DATA);
+   SetIndexBuffer(10, BufCtx2N,  INDICATOR_DATA);
+   SetIndexBuffer(11, BufCtx3P,  INDICATOR_DATA);
+   SetIndexBuffer(12, BufCtx3N,  INDICATOR_DATA);
+
+   ArraySetAsSeries(BufFill1U, true);
+   ArraySetAsSeries(BufFill1L, true);
+   ArraySetAsSeries(BufFill2U, true);
+   ArraySetAsSeries(BufFill2L, true);
+   ArraySetAsSeries(BufFill3U, true);
+   ArraySetAsSeries(BufFill3L, true);
+   ArraySetAsSeries(BufCtxRef, true);
+   ArraySetAsSeries(BufCtx1P, true);
+   ArraySetAsSeries(BufCtx1N, true);
+   ArraySetAsSeries(BufCtx2P, true);
+   ArraySetAsSeries(BufCtx2N, true);
+   ArraySetAsSeries(BufCtx3P, true);
+   ArraySetAsSeries(BufCtx3N, true);
+
+   // Fill plots
+   PlotIndexSetInteger(0, PLOT_DRAW_TYPE, DRAW_FILLING);
+   PlotIndexSetInteger(0, PLOT_LINE_COLOR, 0, ColorFill1);
+   PlotIndexSetString(0, PLOT_LABEL, "Ctx Fill 1");
+
+   PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_FILLING);
+   PlotIndexSetInteger(1, PLOT_LINE_COLOR, 0, ColorFill2);
+   PlotIndexSetString(1, PLOT_LABEL, "Ctx Fill 2");
+
+   PlotIndexSetInteger(2, PLOT_DRAW_TYPE, DRAW_FILLING);
+   PlotIndexSetInteger(2, PLOT_LINE_COLOR, 0, ColorFill3);
+   PlotIndexSetString(2, PLOT_LABEL, "Ctx Fill 3");
+
+   // Context reference
+   PlotIndexSetInteger(3, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(3, PLOT_LINE_COLOR, 0, ColorCtxRef);
+   PlotIndexSetInteger(3, PLOT_LINE_WIDTH, 2);
+   PlotIndexSetString(3, PLOT_LABEL, "Ctx Ref");
+
+   // ±1
+   PlotIndexSetInteger(4, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(4, PLOT_LINE_COLOR, 0, ColorCtx1);
+   PlotIndexSetInteger(4, PLOT_LINE_STYLE, STYLE_DOT);
+   PlotIndexSetInteger(4, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(4, PLOT_LABEL, "Ctx 1+");
+
+   PlotIndexSetInteger(5, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(5, PLOT_LINE_COLOR, 0, ColorCtx1);
+   PlotIndexSetInteger(5, PLOT_LINE_STYLE, STYLE_DOT);
+   PlotIndexSetInteger(5, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(5, PLOT_LABEL, "Ctx 1-");
+
+   // ±2
+   PlotIndexSetInteger(6, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(6, PLOT_LINE_COLOR, 0, ColorCtx2);
+   PlotIndexSetInteger(6, PLOT_LINE_STYLE, STYLE_DASH);
+   PlotIndexSetInteger(6, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(6, PLOT_LABEL, "Ctx 2+");
+
+   PlotIndexSetInteger(7, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(7, PLOT_LINE_COLOR, 0, ColorCtx2);
+   PlotIndexSetInteger(7, PLOT_LINE_STYLE, STYLE_DASH);
+   PlotIndexSetInteger(7, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(7, PLOT_LABEL, "Ctx 2-");
+
+   // ±3
+   PlotIndexSetInteger(8, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(8, PLOT_LINE_COLOR, 0, ColorCtx3);
+   PlotIndexSetInteger(8, PLOT_LINE_STYLE, STYLE_DASHDOT);
+   PlotIndexSetInteger(8, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(8, PLOT_LABEL, "Ctx 3+");
+
+   PlotIndexSetInteger(9, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(9, PLOT_LINE_COLOR, 0, ColorCtx3);
+   PlotIndexSetInteger(9, PLOT_LINE_STYLE, STYLE_DASHDOT);
+   PlotIndexSetInteger(9, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(9, PLOT_LABEL, "Ctx 3-");
+
+   EventSetTimer(2);
    return(INIT_SUCCEEDED);
   }
 
+//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
    EventKillTimer();
    ObjectsDeleteAll(0, "VWAP_");
-   ObjectsDeleteAll(0, "CTX_");
    Comment("");
   }
 
+//+------------------------------------------------------------------+
 void OnTimer()
   {
    ReadJsonState();
    ReadJsonContext();
-   DrawOverlay();
+   DrawExecutionOverlay();
+   if(ShowSignalText) DrawSignalText();
+   ChartRedraw(0);
   }
 
+//+------------------------------------------------------------------+
 int OnCalculate(const int rates_total, const int prev_calculated,
                 const datetime &time[], const double &open[],
                 const double &high[], const double &low[],
@@ -290,10 +409,73 @@ int OnCalculate(const int rates_total, const int prev_calculated,
   {
    ReadJsonState();
    ReadJsonContext();
-   DrawOverlay();
+
+   ClearContextBuffers(rates_total);
+
+   if(ShowContextBands)
+      LoadContextIntoBuffers(rates_total);
+
+   DrawExecutionOverlay();
+
+   if(ShowSignalText)
+      DrawSignalText();
+
    return(rates_total);
   }
 
+//+------------------------------------------------------------------+
+void ClearContextBuffers(const int rates_total)
+  {
+   int lim = MathMin(rates_total, MAX_CTX_POINTS + 20);
+   for(int i = 0; i < lim; i++)
+     {
+      BufFill1U[i] = EMPTY_VALUE;
+      BufFill1L[i] = EMPTY_VALUE;
+      BufFill2U[i] = EMPTY_VALUE;
+      BufFill2L[i] = EMPTY_VALUE;
+      BufFill3U[i] = EMPTY_VALUE;
+      BufFill3L[i] = EMPTY_VALUE;
+
+      BufCtxRef[i] = EMPTY_VALUE;
+      BufCtx1P[i]  = EMPTY_VALUE;
+      BufCtx1N[i]  = EMPTY_VALUE;
+      BufCtx2P[i]  = EMPTY_VALUE;
+      BufCtx2N[i]  = EMPTY_VALUE;
+      BufCtx3P[i]  = EMPTY_VALUE;
+      BufCtx3N[i]  = EMPTY_VALUE;
+     }
+  }
+
+//+------------------------------------------------------------------+
+void LoadContextIntoBuffers(const int rates_total)
+  {
+   if(g_ctx_count <= 0) return;
+
+   // Python writes only closed bars.
+   // So newest exported point belongs on shift 1, not shift 0.
+   for(int i = 0; i < g_ctx_count; i++)
+     {
+      int shift = g_ctx_count - i;
+      if(shift >= rates_total) continue;
+
+      BufFill1U[shift] = g_ctx_1p[i];
+      BufFill1L[shift] = g_ctx_1n[i];
+      BufFill2U[shift] = g_ctx_2p[i];
+      BufFill2L[shift] = g_ctx_2n[i];
+      BufFill3U[shift] = g_ctx_3p[i];
+      BufFill3L[shift] = g_ctx_3n[i];
+
+      BufCtxRef[shift] = g_ctx_ref[i];
+      BufCtx1P[shift]  = g_ctx_1p[i];
+      BufCtx1N[shift]  = g_ctx_1n[i];
+      BufCtx2P[shift]  = g_ctx_2p[i];
+      BufCtx2N[shift]  = g_ctx_2n[i];
+      BufCtx3P[shift]  = g_ctx_3p[i];
+      BufCtx3N[shift]  = g_ctx_3n[i];
+     }
+  }
+
+//+------------------------------------------------------------------+
 void ReadJsonState()
   {
    int handle = FileOpen(JsonPathState, FILE_READ | FILE_TXT | FILE_ANSI);
@@ -320,6 +502,7 @@ void ReadJsonState()
    g_trend       = ExtractString(content, "trend_bin");
   }
 
+//+------------------------------------------------------------------+
 void ReadJsonContext()
   {
    g_ctx_count = 0;
@@ -335,30 +518,23 @@ void ReadJsonContext()
    int pos = 0;
    while(true)
      {
-      int dt_pos = StringFind(content, "\"datetime\":", pos);
-      if(dt_pos < 0 || g_ctx_count >= MAX_CTX_POINTS) break;
+      int ref_pos = StringFind(content, "\"ctx_ref\":", pos);
+      if(ref_pos < 0 || g_ctx_count >= MAX_CTX_POINTS) break;
 
-      string dt_str = ExtractStringFrom(content, dt_pos, "datetime");
-      if(dt_str == "")
-        {
-         pos = dt_pos + 1;
-         continue;
-        }
-
-      g_ctx_time[g_ctx_count] = StringToTime(dt_str);
-      g_ctx_ref[g_ctx_count]  = ExtractDoubleFrom(content, dt_pos, "ctx_ref");
-      g_ctx_1p[g_ctx_count]   = ExtractDoubleFrom(content, dt_pos, "ctx_1p");
-      g_ctx_1n[g_ctx_count]   = ExtractDoubleFrom(content, dt_pos, "ctx_1n");
-      g_ctx_2p[g_ctx_count]   = ExtractDoubleFrom(content, dt_pos, "ctx_2p");
-      g_ctx_2n[g_ctx_count]   = ExtractDoubleFrom(content, dt_pos, "ctx_2n");
-      g_ctx_3p[g_ctx_count]   = ExtractDoubleFrom(content, dt_pos, "ctx_3p");
-      g_ctx_3n[g_ctx_count]   = ExtractDoubleFrom(content, dt_pos, "ctx_3n");
+      g_ctx_ref[g_ctx_count] = ExtractDoubleFrom(content, ref_pos, "ctx_ref");
+      g_ctx_1p[g_ctx_count]  = ExtractDoubleFrom(content, ref_pos, "ctx_1p");
+      g_ctx_1n[g_ctx_count]  = ExtractDoubleFrom(content, ref_pos, "ctx_1n");
+      g_ctx_2p[g_ctx_count]  = ExtractDoubleFrom(content, ref_pos, "ctx_2p");
+      g_ctx_2n[g_ctx_count]  = ExtractDoubleFrom(content, ref_pos, "ctx_2n");
+      g_ctx_3p[g_ctx_count]  = ExtractDoubleFrom(content, ref_pos, "ctx_3p");
+      g_ctx_3n[g_ctx_count]  = ExtractDoubleFrom(content, ref_pos, "ctx_3n");
 
       g_ctx_count++;
-      pos = dt_pos + 1;
+      pos = ref_pos + 1;
      }
   }
 
+//+------------------------------------------------------------------+
 double ExtractDouble(string json, string key)
   {
    string search = "\"" + key + "\": ";
@@ -381,17 +557,7 @@ double ExtractDouble(string json, string key)
    return StringToDouble(StringSubstr(json, pos, end - pos));
   }
 
-string ExtractString(string json, string key)
-  {
-   string search = "\"" + key + "\": \"";
-   int pos = StringFind(json, search);
-   if(pos < 0) return "";
-   pos += StringLen(search);
-   int end = StringFind(json, "\"", pos);
-   if(end < 0) return "";
-   return StringSubstr(json, pos, end - pos);
-  }
-
+//+------------------------------------------------------------------+
 double ExtractDoubleFrom(string json, int start_pos, string key)
   {
    string search = "\"" + key + "\": ";
@@ -414,10 +580,11 @@ double ExtractDoubleFrom(string json, int start_pos, string key)
    return StringToDouble(StringSubstr(json, pos, end - pos));
   }
 
-string ExtractStringFrom(string json, int start_pos, string key)
+//+------------------------------------------------------------------+
+string ExtractString(string json, string key)
   {
    string search = "\"" + key + "\": \"";
-   int pos = StringFind(json, search, start_pos);
+   int pos = StringFind(json, search);
    if(pos < 0) return "";
    pos += StringLen(search);
    int end = StringFind(json, "\"", pos);
@@ -425,6 +592,7 @@ string ExtractStringFrom(string json, int start_pos, string key)
    return StringSubstr(json, pos, end - pos);
   }
 
+//+------------------------------------------------------------------+
 void DrawHLine(string name, double price, color clr, int width, int style)
   {
    if(ObjectFind(0, name) < 0)
@@ -437,80 +605,30 @@ void DrawHLine(string name, double price, color clr, int width, int style)
    ObjectSetInteger(0, name, OBJPROP_BACK, true);
   }
 
-void DrawTrendSegment(string name, datetime t1, double p1, datetime t2, double p2,
-                      color clr, int width, int style)
+//+------------------------------------------------------------------+
+void DrawExecutionOverlay()
   {
-   if(t1 <= 0 || t2 <= 0 || p1 == 0 || p2 == 0) return;
+   if(!ShowExecutionBands || g_reference <= 0) return;
 
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_TREND, 0, t1, p1, t2, p2);
-   else
-     {
-      ObjectMove(0, name, 0, t1, p1);
-      ObjectMove(0, name, 1, t2, p2);
-     }
-
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
-   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
-   ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
-   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   DrawHLine("VWAP_REF", g_reference, ColorVWAP, 2, STYLE_SOLID);
+   DrawHLine("VWAP_1P",  g_band1p,    ColorBand1, 1, STYLE_DOT);
+   DrawHLine("VWAP_1N",  g_band1n,    ColorBand1, 1, STYLE_DOT);
+   DrawHLine("VWAP_2P",  g_band2p,    ColorBand2, 1, STYLE_DASH);
+   DrawHLine("VWAP_2N",  g_band2n,    ColorBand2, 1, STYLE_DASH);
+   DrawHLine("VWAP_3P",  g_band3p,    ColorBand3, 1, STYLE_DASHDOT);
+   DrawHLine("VWAP_3N",  g_band3n,    ColorBand3, 1, STYLE_DASHDOT);
   }
 
-void DrawContextTrail(string prefix, double &arr[], color clr, int width, int style)
+//+------------------------------------------------------------------+
+void DrawSignalText()
   {
-   for(int i = 0; i < g_ctx_count - 1; i++)
-     {
-      string name = prefix + IntegerToString(i);
-      DrawTrendSegment(name,
-                       g_ctx_time[i],   arr[i],
-                       g_ctx_time[i+1], arr[i+1],
-                       clr, width, style);
-     }
-
-   for(int j = g_ctx_count - 1; j < MAX_CTX_POINTS; j++)
-     {
-      string old_name = prefix + IntegerToString(j);
-      if(ObjectFind(0, old_name) >= 0)
-         ObjectDelete(0, old_name);
-     }
-  }
-
-void DrawOverlay()
-  {
-   if(ShowExecutionBands && g_reference > 0)
-     {
-      DrawHLine("VWAP_REF", g_reference, ColorVWAP, 2, STYLE_SOLID);
-      DrawHLine("VWAP_1P",  g_band1p,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_1N",  g_band1n,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_2P",  g_band2p,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_2N",  g_band2n,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_3P",  g_band3p,    ColorBand3, 1, STYLE_DASHDOT);
-      DrawHLine("VWAP_3N",  g_band3n,    ColorBand3, 1, STYLE_DASHDOT);
-     }
-
-   if(ShowContextBands && g_ctx_count > 1)
-     {
-      DrawContextTrail("CTX_REF_", g_ctx_ref, ColorCtxRef, 2, STYLE_SOLID);
-      DrawContextTrail("CTX_1P_",  g_ctx_1p,  ColorCtx1,   1, STYLE_DOT);
-      DrawContextTrail("CTX_1N_",  g_ctx_1n,  ColorCtx1,   1, STYLE_DOT);
-      DrawContextTrail("CTX_2P_",  g_ctx_2p,  ColorCtx2,   1, STYLE_DASH);
-      DrawContextTrail("CTX_2N_",  g_ctx_2n,  ColorCtx2,   1, STYLE_DASH);
-      DrawContextTrail("CTX_3P_",  g_ctx_3p,  ColorCtx3,   1, STYLE_DASHDOT);
-      DrawContextTrail("CTX_3N_",  g_ctx_3n,  ColorCtx3,   1, STYLE_DASHDOT);
-     }
-
-   if(ShowSignalText)
-     {
-      string label = StringFormat(
-         "Zone: %s | Z: %.2f | Trend: %s\nP(MR): %.0f%%  Edge: %.2f\nSignal: %s",
-         g_zone, g_z_score, g_trend,
-         g_p_mr * 100.0, g_edge_gap,
-         g_signal_type
-      );
-      Comment(label);
-     }
+   string label = StringFormat(
+      "Zone: %s | Z: %.2f | Trend: %s\nP(MR): %.0f%%  Edge: %.2f\nSignal: %s",
+      g_zone, g_z_score, g_trend,
+      g_p_mr * 100.0, g_edge_gap,
+      g_signal_type
+   );
+   Comment(label);
   }
 //+------------------------------------------------------------------+
 '''
