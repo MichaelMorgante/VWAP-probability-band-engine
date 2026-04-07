@@ -48,6 +48,14 @@ CONFIG = {
 
     # Plot
     'plot_last_n_bars': 180,
+        # ── Context overlay toggles ─────────────────────────────────────
+    'show_execution_bands': True,
+    'show_context_bands': True,
+    'fill_band_zones': True,
+
+    # Rolling context VWAP overlay (secondary / bendy reference)
+    'context_vwap_window': 60,
+    'context_sigma_window': 30,
 
     # ── PHASE 1: Execution cost parameters ──────────────────────────
     # Spread in price units (e.g. 0.5 index points for US100 on M1)
