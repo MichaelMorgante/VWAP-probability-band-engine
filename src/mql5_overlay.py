@@ -211,14 +211,15 @@ void DrawOverlay()
 def write_mql5_double_overlay(output_path: str = "live_artifacts/VWAP_Overlay.mq5") -> Path:
     mql5_code = r'''
 //+------------------------------------------------------------------+
-//| VWAP Double Overlay - Phase B                                    |
+//| VWAP Double Overlay - Clean Context Version                      |
 //| Straight execution lines from live_state.json                    |
-//| Bendy context bands + faint fills from live_context.json         |
+//| Bendy context lines from live_context.json                       |
+//| Only inner ±1σ context zone is faintly filled                    |
 //+------------------------------------------------------------------+
 #property strict
 #property indicator_chart_window
-#property indicator_buffers 13
-#property indicator_plots   10
+#property indicator_buffers 9
+#property indicator_plots   8
 
 input string JsonPathState   = "live_state.json";
 input string JsonPathContext = "live_context.json";
@@ -234,27 +235,17 @@ input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
 
 // Context line colours
-input color ColorCtxRef = clrMediumPurple;
-input color ColorCtx1   = clrTurquoise;
-input color ColorCtx2   = clrOrchid;
-input color ColorCtx3   = clrSlateBlue;
+input color ColorCtxRef = clrRoyalBlue;
+input color ColorCtx1   = clrLightSkyBlue;
+input color ColorCtx2   = clrSilver;
+input color ColorCtx3   = clrGainsboro;
 
-// Context fill colours
-input color ColorFill1 = clrPaleTurquoise;
-input color ColorFill2 = clrThistle;
-input color ColorFill3 = clrLavender;
-
-// Signal colours
-input color ColorSignalMR   = clrLimeGreen;
-input color ColorSignalCont = clrOrangeRed;
+// Single faint inner fill
+input color ColorFill1 = clrAliceBlue;
 
 // Buffers
 double BufFill1U[];
 double BufFill1L[];
-double BufFill2U[];
-double BufFill2L[];
-double BufFill3U[];
-double BufFill3L[];
 double BufCtxRef[];
 double BufCtx1P[];
 double BufCtx1N[];
@@ -272,7 +263,7 @@ double g_band2p = 0, g_band2n = 0;
 double g_band3p = 0, g_band3n = 0;
 
 // Context arrays from JSON
-#define MAX_CTX_POINTS 300
+#define MAX_CTX_POINTS 400
 int    g_ctx_count = 0;
 double g_ctx_ref[MAX_CTX_POINTS];
 double g_ctx_1p[MAX_CTX_POINTS];
@@ -285,33 +276,21 @@ double g_ctx_3n[MAX_CTX_POINTS];
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   // Plot 0: Fill 1
+   // Fill buffers (plot 0)
    SetIndexBuffer(0, BufFill1U, INDICATOR_DATA);
    SetIndexBuffer(1, BufFill1L, INDICATOR_DATA);
 
-   // Plot 1: Fill 2
-   SetIndexBuffer(2, BufFill2U, INDICATOR_DATA);
-   SetIndexBuffer(3, BufFill2L, INDICATOR_DATA);
-
-   // Plot 2: Fill 3
-   SetIndexBuffer(4, BufFill3U, INDICATOR_DATA);
-   SetIndexBuffer(5, BufFill3L, INDICATOR_DATA);
-
-   // Plot 3..9: lines
-   SetIndexBuffer(6,  BufCtxRef, INDICATOR_DATA);
-   SetIndexBuffer(7,  BufCtx1P,  INDICATOR_DATA);
-   SetIndexBuffer(8,  BufCtx1N,  INDICATOR_DATA);
-   SetIndexBuffer(9,  BufCtx2P,  INDICATOR_DATA);
-   SetIndexBuffer(10, BufCtx2N,  INDICATOR_DATA);
-   SetIndexBuffer(11, BufCtx3P,  INDICATOR_DATA);
-   SetIndexBuffer(12, BufCtx3N,  INDICATOR_DATA);
+   // Line buffers (plots 1..7)
+   SetIndexBuffer(2, BufCtxRef, INDICATOR_DATA);
+   SetIndexBuffer(3, BufCtx1P,  INDICATOR_DATA);
+   SetIndexBuffer(4, BufCtx1N,  INDICATOR_DATA);
+   SetIndexBuffer(5, BufCtx2P,  INDICATOR_DATA);
+   SetIndexBuffer(6, BufCtx2N,  INDICATOR_DATA);
+   SetIndexBuffer(7, BufCtx3P,  INDICATOR_DATA);
+   SetIndexBuffer(8, BufCtx3N,  INDICATOR_DATA);
 
    ArraySetAsSeries(BufFill1U, true);
    ArraySetAsSeries(BufFill1L, true);
-   ArraySetAsSeries(BufFill2U, true);
-   ArraySetAsSeries(BufFill2L, true);
-   ArraySetAsSeries(BufFill3U, true);
-   ArraySetAsSeries(BufFill3L, true);
    ArraySetAsSeries(BufCtxRef, true);
    ArraySetAsSeries(BufCtx1P, true);
    ArraySetAsSeries(BufCtx1N, true);
@@ -320,63 +299,59 @@ int OnInit()
    ArraySetAsSeries(BufCtx3P, true);
    ArraySetAsSeries(BufCtx3N, true);
 
-   // Fill plots
+   // Plot 0 = one fill only
    PlotIndexSetInteger(0, PLOT_DRAW_TYPE, DRAW_FILLING);
    PlotIndexSetInteger(0, PLOT_LINE_COLOR, 0, ColorFill1);
-   PlotIndexSetString(0, PLOT_LABEL, "Ctx Fill 1");
+   PlotIndexSetInteger(0, PLOT_LINE_COLOR, 1, ColorFill1);
+   PlotIndexSetString(0, PLOT_LABEL, "Ctx Inner Fill");
 
-   PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_FILLING);
-   PlotIndexSetInteger(1, PLOT_LINE_COLOR, 0, ColorFill2);
-   PlotIndexSetString(1, PLOT_LABEL, "Ctx Fill 2");
+   // Plot 1 = context reference
+   PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(1, PLOT_LINE_COLOR, 0, ColorCtxRef);
+   PlotIndexSetInteger(1, PLOT_LINE_WIDTH, 2);
+   PlotIndexSetString(1, PLOT_LABEL, "Ctx Ref");
 
-   PlotIndexSetInteger(2, PLOT_DRAW_TYPE, DRAW_FILLING);
-   PlotIndexSetInteger(2, PLOT_LINE_COLOR, 0, ColorFill3);
-   PlotIndexSetString(2, PLOT_LABEL, "Ctx Fill 3");
+   // Plot 2 = +1
+   PlotIndexSetInteger(2, PLOT_DRAW_TYPE, DRAW_LINE);
+   PlotIndexSetInteger(2, PLOT_LINE_COLOR, 0, ColorCtx1);
+   PlotIndexSetInteger(2, PLOT_LINE_STYLE, STYLE_DOT);
+   PlotIndexSetInteger(2, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(2, PLOT_LABEL, "Ctx 1+");
 
-   // Context reference
+   // Plot 3 = -1
    PlotIndexSetInteger(3, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(3, PLOT_LINE_COLOR, 0, ColorCtxRef);
-   PlotIndexSetInteger(3, PLOT_LINE_WIDTH, 2);
-   PlotIndexSetString(3, PLOT_LABEL, "Ctx Ref");
+   PlotIndexSetInteger(3, PLOT_LINE_COLOR, 0, ColorCtx1);
+   PlotIndexSetInteger(3, PLOT_LINE_STYLE, STYLE_DOT);
+   PlotIndexSetInteger(3, PLOT_LINE_WIDTH, 1);
+   PlotIndexSetString(3, PLOT_LABEL, "Ctx 1-");
 
-   // ±1
+   // Plot 4 = +2
    PlotIndexSetInteger(4, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(4, PLOT_LINE_COLOR, 0, ColorCtx1);
-   PlotIndexSetInteger(4, PLOT_LINE_STYLE, STYLE_DOT);
+   PlotIndexSetInteger(4, PLOT_LINE_COLOR, 0, ColorCtx2);
+   PlotIndexSetInteger(4, PLOT_LINE_STYLE, STYLE_DASH);
    PlotIndexSetInteger(4, PLOT_LINE_WIDTH, 1);
-   PlotIndexSetString(4, PLOT_LABEL, "Ctx 1+");
+   PlotIndexSetString(4, PLOT_LABEL, "Ctx 2+");
 
+   // Plot 5 = -2
    PlotIndexSetInteger(5, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(5, PLOT_LINE_COLOR, 0, ColorCtx1);
-   PlotIndexSetInteger(5, PLOT_LINE_STYLE, STYLE_DOT);
+   PlotIndexSetInteger(5, PLOT_LINE_COLOR, 0, ColorCtx2);
+   PlotIndexSetInteger(5, PLOT_LINE_STYLE, STYLE_DASH);
    PlotIndexSetInteger(5, PLOT_LINE_WIDTH, 1);
-   PlotIndexSetString(5, PLOT_LABEL, "Ctx 1-");
+   PlotIndexSetString(5, PLOT_LABEL, "Ctx 2-");
 
-   // ±2
+   // Plot 6 = +3
    PlotIndexSetInteger(6, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(6, PLOT_LINE_COLOR, 0, ColorCtx2);
-   PlotIndexSetInteger(6, PLOT_LINE_STYLE, STYLE_DASH);
+   PlotIndexSetInteger(6, PLOT_LINE_COLOR, 0, ColorCtx3);
+   PlotIndexSetInteger(6, PLOT_LINE_STYLE, STYLE_DASHDOT);
    PlotIndexSetInteger(6, PLOT_LINE_WIDTH, 1);
-   PlotIndexSetString(6, PLOT_LABEL, "Ctx 2+");
+   PlotIndexSetString(6, PLOT_LABEL, "Ctx 3+");
 
+   // Plot 7 = -3
    PlotIndexSetInteger(7, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(7, PLOT_LINE_COLOR, 0, ColorCtx2);
-   PlotIndexSetInteger(7, PLOT_LINE_STYLE, STYLE_DASH);
+   PlotIndexSetInteger(7, PLOT_LINE_COLOR, 0, ColorCtx3);
+   PlotIndexSetInteger(7, PLOT_LINE_STYLE, STYLE_DASHDOT);
    PlotIndexSetInteger(7, PLOT_LINE_WIDTH, 1);
-   PlotIndexSetString(7, PLOT_LABEL, "Ctx 2-");
-
-   // ±3
-   PlotIndexSetInteger(8, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(8, PLOT_LINE_COLOR, 0, ColorCtx3);
-   PlotIndexSetInteger(8, PLOT_LINE_STYLE, STYLE_DASHDOT);
-   PlotIndexSetInteger(8, PLOT_LINE_WIDTH, 1);
-   PlotIndexSetString(8, PLOT_LABEL, "Ctx 3+");
-
-   PlotIndexSetInteger(9, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(9, PLOT_LINE_COLOR, 0, ColorCtx3);
-   PlotIndexSetInteger(9, PLOT_LINE_STYLE, STYLE_DASHDOT);
-   PlotIndexSetInteger(9, PLOT_LINE_WIDTH, 1);
-   PlotIndexSetString(9, PLOT_LABEL, "Ctx 3-");
+   PlotIndexSetString(7, PLOT_LABEL, "Ctx 3-");
 
    EventSetTimer(2);
    return(INIT_SUCCEEDED);
@@ -431,10 +406,6 @@ void ClearContextBuffers(const int rates_total)
      {
       BufFill1U[i] = EMPTY_VALUE;
       BufFill1L[i] = EMPTY_VALUE;
-      BufFill2U[i] = EMPTY_VALUE;
-      BufFill2L[i] = EMPTY_VALUE;
-      BufFill3U[i] = EMPTY_VALUE;
-      BufFill3L[i] = EMPTY_VALUE;
 
       BufCtxRef[i] = EMPTY_VALUE;
       BufCtx1P[i]  = EMPTY_VALUE;
@@ -451,8 +422,7 @@ void LoadContextIntoBuffers(const int rates_total)
   {
    if(g_ctx_count <= 0) return;
 
-   // Python writes only closed bars.
-   // So newest exported point belongs on shift 1, not shift 0.
+   // newest closed exported point goes to shift 1
    for(int i = 0; i < g_ctx_count; i++)
      {
       int shift = g_ctx_count - i;
@@ -460,10 +430,6 @@ void LoadContextIntoBuffers(const int rates_total)
 
       BufFill1U[shift] = g_ctx_1p[i];
       BufFill1L[shift] = g_ctx_1n[i];
-      BufFill2U[shift] = g_ctx_2p[i];
-      BufFill2L[shift] = g_ctx_2n[i];
-      BufFill3U[shift] = g_ctx_3p[i];
-      BufFill3L[shift] = g_ctx_3n[i];
 
       BufCtxRef[shift] = g_ctx_ref[i];
       BufCtx1P[shift]  = g_ctx_1p[i];
