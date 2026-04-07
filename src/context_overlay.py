@@ -1,5 +1,6 @@
 import pandas as pd
 
+# ── Context overlay: rolling / bendy VWAP bands ─────────────────────
 def compute_context_vwap(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     """
     Compute a rolling ('bendy') VWAP and its rolling sigma bands.
@@ -50,20 +51,4 @@ def compute_context_vwap(df: pd.DataFrame, config: dict) -> pd.DataFrame:
         out[f'context_band_{k}p'] = out['context_reference'] + k * out['context_sigma']
         out[f'context_band_{k}n'] = out['context_reference'] - k * out['context_sigma']
 
-    print("✅ Context VWAP bands added")
-    print(f"   Context VWAP window : {window}")
-    print(f"   Context sigma window: {sigma_window}")
-
     return out
-
-
-# Add bendy/context overlay columns to df
-context_bands_df = compute_context_vwap(df, CONFIG)
-df = pd.concat([df, context_bands_df], axis=1)
-
-# Optional inspection
-cols_to_show = [
-    'datetime', 'close', 'reference', 'band_1p', 'band_1n',
-    'context_reference', 'context_band_1p', 'context_band_1n'
-]
-print(df[[c for c in cols_to_show if c in df.columns]].tail(10))
