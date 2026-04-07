@@ -5,6 +5,92 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.context_overlay import compute_context_vwap
+
+
+# ── Context overlay: export bendy live trail for MT5 / external view ──
+def write_live_context(
+    symbol: str,
+    live_df: pd.DataFrame,
+    config: dict,
+    output_dir=None,
+    n_points: int = 50
+) -> None:
+    """
+    Compute rolling context VWAP bands on recent live bars and write them
+    to live_context.json for MT5 or other chart overlays.
+    """
+    if live_df is None or live_df.empty:
+        print("⚠️ write_live_context skipped: live_df is empty")
+        return
+
+    live_df = live_df.copy()
+
+    required_price_cols = ['close', 'tick_volume']
+    missing = [c for c in required_price_cols if c not in live_df.columns]
+    if missing:
+        print(f"⚠️ write_live_context skipped: missing columns {missing}")
+        return
+
+    if 'datetime' not in live_df.columns:
+        print("⚠️ write_live_context skipped: missing 'datetime'")
+        return
+
+    live_df['datetime'] = pd.to_datetime(live_df['datetime'])
+
+    if 'typical_price' not in live_df.columns:
+        if all(c in live_df.columns for c in ['high', 'low', 'close']):
+            live_df['typical_price'] = (
+                live_df['high'] + live_df['low'] + live_df['close']
+            ) / 3.0
+        else:
+            print("⚠️ write_live_context skipped: cannot build typical_price")
+            return
+
+    if 'session_id' not in live_df.columns:
+        live_df['session_id'] = live_df['datetime'].dt.date.astype(str)
+
+    if output_dir is None:
+        try:
+            import MetaTrader5 as mt5
+            output_dir = Path(mt5.terminal_info().data_path) / 'MQL5' / 'Files'
+        except Exception:
+            output_dir = Path('live_artifacts')
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / 'live_context.json'
+
+    ctx = compute_context_vwap(live_df, config).copy()
+    ctx['datetime'] = live_df['datetime'].values
+    tail = ctx.tail(n_points)
+
+    points = []
+    for _, row in tail.iterrows():
+        if pd.isna(row.get('context_reference')):
+            continue
+
+        points.append({
+            'datetime': str(row['datetime'])[:19],
+            'ctx_ref':  round(float(row['context_reference']), 5),
+            'ctx_1p':   round(float(row['context_band_1p']), 5),
+            'ctx_1n':   round(float(row['context_band_1n']), 5),
+            'ctx_2p':   round(float(row['context_band_2p']), 5),
+            'ctx_2n':   round(float(row['context_band_2n']), 5),
+            'ctx_3p':   round(float(row['context_band_3p']), 5),
+            'ctx_3n':   round(float(row['context_band_3n']), 5),
+        })
+
+    payload = {
+        'symbol': symbol,
+        'n_points': len(points),
+        'points': points,
+    }
+
+    with open(output_path, 'w') as f:
+        json.dump(payload, f, indent=2)
+
+    print(f"✅ Context written: {output_path} ({len(points)} points)")
 
 def run_live(symbol: str, timeframe_mt5, config: dict,
              prob_table: pd.DataFrame,
