@@ -239,3 +239,201 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
 
     except KeyboardInterrupt:
         print("\n🔴 Live mode stopped")
+
+
+# ── Context overlay: separate live runner with bendy export ──────────
+def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
+                          prob_table: pd.DataFrame,
+                          marginal_table: pd.DataFrame = None,
+                          load_mt5_live=None,
+                          EngineState=None,
+                          update_engine_state=None,
+                          generate_signal=None,
+                          regime_gate=None,
+                          apply_filters=None,
+                          on_state_update=None) -> None:
+    """
+    Live mode runner with:
+    - Session warmup guard
+    - Signal state machine
+    - Reconnection loop with backoff
+    - JSON state output to live_artifacts/live_state.json each bar
+    - Context VWAP trail output to live_artifacts/live_context.json each bar
+
+    This preserves the original run_live() and adds a separate version for
+    context-overlay export testing.
+    """
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        raise ImportError("pip install MetaTrader5")
+
+    if load_mt5_live is None:
+        raise ValueError("run_live_with_context() requires load_mt5_live")
+    if EngineState is None:
+        raise ValueError("run_live_with_context() requires EngineState")
+    if update_engine_state is None:
+        raise ValueError("run_live_with_context() requires update_engine_state")
+    if generate_signal is None:
+        raise ValueError("run_live_with_context() requires generate_signal")
+    if regime_gate is None:
+        raise ValueError("run_live_with_context() requires regime_gate")
+    if apply_filters is None:
+        raise ValueError("run_live_with_context() requires apply_filters")
+
+    if marginal_table is None:
+        marginal_table = prob_table
+
+    output_path = Path("live_artifacts/live_state.json")
+    output_path.parent.mkdir(exist_ok=True)
+
+    # ── Warm up engine ──
+    warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
+
+    if 'sessions' in config:
+        try:
+            from src.loaders import assign_sessions
+            warmup_df = assign_sessions(warmup_df, config['sessions'])
+        except Exception:
+            pass
+
+    if 'typical_price' not in warmup_df.columns and all(c in warmup_df.columns for c in ['high', 'low', 'close']):
+        warmup_df['typical_price'] = (
+            warmup_df['high'] + warmup_df['low'] + warmup_df['close']
+        ) / 3.0
+
+    state = EngineState()
+    for _, row in warmup_df.iterrows():
+        state = update_engine_state(state, row.to_dict(), config,
+                                    prob_table, marginal_table)
+    print(f"✅ Live engine warmed up on {len(warmup_df)} bars")
+
+    last_bar_time = None
+    signal_state = 'NO_SIGNAL'
+    active_signal = None
+    reconnect_wait = 1
+
+    print(f"🟢 Live mode with context overlay active — {symbol} | Ctrl+C to stop")
+
+    try:
+        while True:
+            try:
+                rates = mt5.copy_rates_from_pos(symbol, timeframe_mt5, 1, 1)
+            except Exception as e:
+                print(f"⚠️  MT5 read error: {e} — retrying in {reconnect_wait}s")
+                time.sleep(reconnect_wait)
+                reconnect_wait = min(reconnect_wait * 2, 60)
+                continue
+
+            reconnect_wait = 1
+
+            if rates is None or len(rates) == 0:
+                time.sleep(1)
+                continue
+
+            bar_time = rates[0]['time']
+            if bar_time == last_bar_time:
+                time.sleep(1)
+                continue
+
+            last_bar_time = bar_time
+            bar = {
+                'datetime':    pd.Timestamp(bar_time, unit='s', tz='UTC'),
+                'open':        float(rates[0]['open']),
+                'high':        float(rates[0]['high']),
+                'low':         float(rates[0]['low']),
+                'close':       float(rates[0]['close']),
+                'tick_volume': float(rates[0]['tick_volume']),
+            }
+
+            if 'sessions' in config:
+                try:
+                    from src.loaders import assign_session_id
+                    bar['session_id'] = assign_session_id(
+                        bar['datetime'], config['sessions']
+                    )[0]
+                except Exception:
+                    bar['session_id'] = str(bar['datetime'].date())
+
+            bar['typical_price'] = (bar['high'] + bar['low'] + bar['close']) / 3.0
+
+            state = update_engine_state(state, bar, config, prob_table, marginal_table)
+            sig = generate_signal(state, config)
+            sig = regime_gate(sig, config)
+            sig = apply_filters(sig, state, config)
+
+            alert = None
+            new_sig_state = 'SIGNAL_ACTIVE' if sig.signal_type != 'NO_SIGNAL' else 'NO_SIGNAL'
+
+            if signal_state == 'NO_SIGNAL' and new_sig_state == 'SIGNAL_ACTIVE':
+                alert = f"🔔 NEW SIGNAL: {sig.signal_type} | Zone {sig.zone} | EdgeGap {sig.edge_gap:.2f}"
+                active_signal = sig
+
+            elif signal_state == 'SIGNAL_ACTIVE' and new_sig_state == 'NO_SIGNAL':
+                if active_signal is not None:
+                    alert = f"✅ SIGNAL RESOLVED: {active_signal.signal_type} | Z now={state.z_score:.2f}"
+                else:
+                    alert = f"✅ SIGNAL RESOLVED | Z now={state.z_score:.2f}"
+                active_signal = None
+                new_sig_state = 'NO_SIGNAL'
+
+            signal_state = new_sig_state
+
+            # ── Append new bar to rolling live buffer ──
+            warmup_df = pd.concat([warmup_df, pd.DataFrame([bar])], ignore_index=True)
+
+            keep_bars = max(
+                config.get('context_vwap_window', 60),
+                config.get('context_sigma_window', 30)
+            ) + 60
+
+            warmup_df = warmup_df.tail(keep_bars).copy()
+
+            # ── Live state JSON output (straight execution lines) ──
+            probs = state.probabilities
+            live_state_dict = {
+                'datetime':      str(state.datetime),
+                'symbol':        symbol,
+                'close':         round(state.close, 5),
+                'reference':     round(state.reference, 5),
+                'sigma':         round(state.sigma, 5),
+                'z_score':       round(state.z_score, 4),
+                'z_velocity':    round(state.z_velocity, 4),
+                'zone':          state.zone,
+                'trend_bin':     state.context.get('trend_bin', ''),
+                'volume_bin':    state.context.get('volume_bin', ''),
+                'time_bin':      state.context.get('time_bin', ''),
+                'p_mr':          round(probs.get('MR', {}).get('prob', 0), 4) if isinstance(probs.get('MR'), dict) else 0,
+                'p_cont':        round(probs.get('CONT', {}).get('prob', 0), 4) if isinstance(probs.get('CONT'), dict) else 0,
+                'edge_gap':      round(probs.get('edge_gap', 0), 4),
+                'signal_type':   sig.signal_type,
+                'signal_state':  signal_state,
+                'session_bar':   state.session_bar_count,
+                'band_1p':       round(state.bands.get('1+', 0), 5),
+                'band_1n':       round(state.bands.get('1-', 0), 5),
+                'band_2p':       round(state.bands.get('2+', 0), 5),
+                'band_2n':       round(state.bands.get('2-', 0), 5),
+                'band_3p':       round(state.bands.get('3+', 0), 5),
+                'band_3n':       round(state.bands.get('3-', 0), 5),
+            }
+
+            with open(output_path, 'w') as f:
+                json.dump(live_state_dict, f, indent=2)
+
+            # ── Context VWAP trail output (bendy overlay) ──
+            write_live_context(
+                symbol,
+                warmup_df,
+                config,
+                output_dir=output_path.parent,
+                n_points=50
+            )
+
+            if alert:
+                print(alert)
+
+            if on_state_update:
+                on_state_update(copy.copy(state), sig)
+
+    except KeyboardInterrupt:
+        print("\n🔴 Live mode stopped")
