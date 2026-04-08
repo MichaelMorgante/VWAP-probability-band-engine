@@ -30,7 +30,7 @@ input bool ShowMoveLabel = true;
 
 // Table placement / styling
 input int  TableCorner    = CORNER_RIGHT_UPPER;
-input int  TableXOffset   = 12;
+input int  TableXOffset   = 140;
 input int  TableYOffset   = 22;
 input int  TableRowGap    = 16;
 input int  TableFontSize  = 10;
