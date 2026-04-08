@@ -25,6 +25,16 @@ input string JsonPath = "live_state.json";
 input bool ShowBands   = true;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
+input bool ShowBandTable = true;
+input bool ShowMoveLabel = true;
+
+// Table placement / styling
+input int  TableCorner    = CORNER_RIGHT_UPPER;
+input int  TableXOffset   = 12;
+input int  TableYOffset   = 22;
+input int  TableRowGap    = 16;
+input int  TableFontSize  = 10;
+input color TableTextColor = clrWhite;
 
 // Band colours
 input color ColorVWAP  = clrDodgerBlue;
@@ -33,6 +43,9 @@ input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
 input color ColorSignalMR   = clrLimeGreen;
 input color ColorSignalCont = clrOrangeRed;
+input color ColorMoveUp   = clrLimeGreen;
+input color ColorMoveDown = clrTomato;
+input color ColorMoveFlat = clrSilver;
 
 // Internal state
 double g_reference = 0, g_sigma = 0, g_z_score = 0;
@@ -41,6 +54,8 @@ double g_p_mr = 0, g_edge_gap = 0;
 double g_band1p = 0, g_band1n = 0;
 double g_band2p = 0, g_band2n = 0;
 double g_band3p = 0, g_band3n = 0;
+double g_last_price = 0;
+double g_move_points = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -140,8 +155,97 @@ void DrawHLine(string name, double price, color clr, int width, int style)
   }
 
 //+------------------------------------------------------------------+
+void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
+  {
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+
+   ObjectSetInteger(0, name, OBJPROP_CORNER, TableCorner);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, font_size);
+   ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+  }
+  
+//+------------------------------------------------------------------+
+void DrawBandTable()
+  {
+   int x = TableXOffset;
+   int y = TableYOffset;
+
+   DrawLabel("VWAP_TABLE_TITLE", "VWAP Bands", x, y, TableTextColor, TableFontSize + 1);
+   y += TableRowGap + 4;
+
+   DrawLabel("VWAP_ROW_3P", StringFormat("+3σ   %.2f", g_band3p), x, y, ColorBand3, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_2P", StringFormat("+2σ   %.2f", g_band2p), x, y, ColorBand2, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_1P", StringFormat("+1σ   %.2f", g_band1p), x, y, ColorBand1, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_V",  StringFormat("VWAP  %.2f", g_reference), x, y, ColorVWAP, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_1N", StringFormat("-1σ   %.2f", g_band1n), x, y, ColorBand1, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_2N", StringFormat("-2σ   %.2f", g_band2n), x, y, ColorBand2, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_3N", StringFormat("-3σ   %.2f", g_band3n), x, y, ColorBand3, TableFontSize);
+  }  
+
+
+//+------------------------------------------------------------------+ 
+void DrawMoveLabel()
+  {
+   int x = TableXOffset;
+   int y = TableYOffset + (TableRowGap + 4) + 7 * TableRowGap + 8;
+
+   string arrow = "•";
+   color move_clr = ColorMoveFlat;
+
+   if(g_move_points > 0.0)
+     {
+      arrow = "▲";
+      move_clr = ColorMoveUp;
+     }
+   else if(g_move_points < 0.0)
+     {
+      arrow = "▼";
+      move_clr = ColorMoveDown;
+     }
+
+   DrawLabel("VWAP_MOVE_LABEL",
+             StringFormat("Move: %s %.2f pts", arrow, MathAbs(g_move_points)),
+             x, y, move_clr, TableFontSize);
+  }
+  
+//+------------------------------------------------------------------+
+void DrawMoveLabel()
+  {
+   int x = TableXOffset;
+   int y = TableYOffset + (TableRowGap + 4) + 7 * TableRowGap + 8;
+
+   string arrow = "•";
+   color move_clr = ColorMoveFlat;
+
+   if(g_move_points > 0.0)
+     {
+      arrow = "▲";
+      move_clr = ColorMoveUp;
+     }
+   else if(g_move_points < 0.0)
+     {
+      arrow = "▼";
+      move_clr = ColorMoveDown;
+     }
+
+   DrawLabel("VWAP_MOVE_LABEL",
+             StringFormat("Move: %s %.2f pts", arrow, MathAbs(g_move_points)),
+             x, y, move_clr, TableFontSize);
+  }
+  
+//+------------------------------------------------------------------+
 void DrawOverlay()
   {
+   g_last_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   g_move_points = g_last_price - g_reference;
+
    if(ShowBands && g_reference > 0)
      {
       DrawHLine("VWAP_REF",   g_reference, ColorVWAP,  2, STYLE_SOLID);
@@ -153,11 +257,18 @@ void DrawOverlay()
       DrawHLine("VWAP_3N",    g_band3n,    ColorBand3, 1, STYLE_DASHDOT);
      }
 
+   if(ShowBandTable && g_reference > 0)
+     {
+      DrawBandTable();
+     }
+
+   if(ShowMoveLabel && g_reference > 0)
+     {
+      DrawMoveLabel();
+     }
+
    if(ShowSignal || ShowZScore)
      {
-      color sig_color = (g_signal_type == "NO_SIGNAL") ? clrGray :
-                        (StringFind(g_signal_type, "MR") >= 0) ? ColorSignalMR : ColorSignalCont;
-
       string label = StringFormat(
          "Zone: %s | Z: %.2f | Trend: %s\nP(MR): %.0f%%  Edge: %.2f\nSignal: %s",
          g_zone, g_z_score, g_trend,
@@ -172,7 +283,7 @@ void DrawOverlay()
 
     local_path = Path(output_dir) / filename
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    local_path.write_text(mql5_code.strip(), encoding="utf-8")
+    local_path.write_text(mql5_code.strip(), encoding="utf-8", newline="\n")
     print(f"✅ MQL5 source written → {local_path}")
 
     def find_mt5_indicators_dir():
