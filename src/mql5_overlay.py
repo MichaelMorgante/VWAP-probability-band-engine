@@ -177,16 +177,16 @@ void DrawBandTable()
    int x = TableXOffset;
    int y = TableYOffset;
 
-   DrawLabel("VWAP_TABLE_TITLE", "VWAP Bands", x, y, TableTextColor, TableFontSize + 1);
+   DrawLabel("VWAP_TABLE_TITLE", "Bands", x, y, TableTextColor, TableFontSize + 1);
    y += TableRowGap + 4;
 
-   DrawLabel("VWAP_ROW_3P", StringFormat("+3σ   %.2f", g_band3p), x, y, ColorBand3, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_2P", StringFormat("+2σ   %.2f", g_band2p), x, y, ColorBand2, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_1P", StringFormat("+1σ   %.2f", g_band1p), x, y, ColorBand1, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_V",  StringFormat("VWAP  %.2f", g_reference), x, y, ColorVWAP, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_1N", StringFormat("-1σ   %.2f", g_band1n), x, y, ColorBand1, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_2N", StringFormat("-2σ   %.2f", g_band2n), x, y, ColorBand2, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_3N", StringFormat("-3σ   %.2f", g_band3n), x, y, ColorBand3, TableFontSize);
+   DrawLabel("VWAP_ROW_3P", StringFormat("+3σ %.2f", g_band3p), x, y, ColorBand3, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_2P", StringFormat("+2σ %.2f", g_band2p), x, y, ColorBand2, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_1P", StringFormat("+1σ %.2f", g_band1p), x, y, ColorBand1, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_V",  StringFormat("VW %.2f", g_reference), x, y, ColorVWAP, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_1N", StringFormat("-1σ %.2f", g_band1n), x, y, ColorBand1, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_2N", StringFormat("-2σ %.2f", g_band2n), x, y, ColorBand2, TableFontSize); y += TableRowGap;
+   DrawLabel("VWAP_ROW_3N", StringFormat("-3σ %.2f", g_band3n), x, y, ColorBand3, TableFontSize);
   }  
 
 
