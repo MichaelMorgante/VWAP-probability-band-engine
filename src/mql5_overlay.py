@@ -26,11 +26,10 @@ input bool ShowBands   = true;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
 input bool ShowBandTable = true;
-input bool ShowMoveLabel = true;
 
 // Table placement / styling
 input int  TableCorner    = CORNER_RIGHT_UPPER;
-input int  TableXOffset   = 140;
+input int  TableXOffset   = 205;
 input int  TableYOffset   = 22;
 input int  TableRowGap    = 16;
 input int  TableFontSize  = 10;
@@ -54,8 +53,15 @@ double g_p_mr = 0, g_edge_gap = 0;
 double g_band1p = 0, g_band1n = 0;
 double g_band2p = 0, g_band2n = 0;
 double g_band3p = 0, g_band3n = 0;
-double g_last_price = 0;
-double g_move_points = 0;
+
+// previous values
+double g_prev_reference = 0;
+double g_prev_band1p = 0, g_prev_band1n = 0;
+double g_prev_band2p = 0, g_prev_band2n = 0;
+double g_prev_band3p = 0, g_prev_band3n = 0;
+
+// session-start reference
+double g_start_reference = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -102,7 +108,16 @@ void ReadJsonState()
       content += FileReadString(handle);
    FileClose(handle);
 
-   // Simple key-value extraction (no full JSON parser needed)
+   // store previous values before overwriting
+   g_prev_reference = g_reference;
+   g_prev_band1p = g_band1p;
+   g_prev_band1n = g_band1n;
+   g_prev_band2p = g_band2p;
+   g_prev_band2n = g_band2n;
+   g_prev_band3p = g_band3p;
+   g_prev_band3n = g_band3n;
+
+   // read new values
    g_reference   = ExtractDouble(content, "reference");
    g_sigma       = ExtractDouble(content, "sigma");
    g_z_score     = ExtractDouble(content, "z_score");
@@ -117,6 +132,10 @@ void ReadJsonState()
    g_zone        = ExtractString(content, "zone");
    g_signal_type = ExtractString(content, "signal_type");
    g_trend       = ExtractString(content, "trend_bin");
+
+   // set start reference once
+   if(g_start_reference <= 0.0 && g_reference > 0.0)
+      g_start_reference = g_reference;
   }
 
 //+------------------------------------------------------------------+
@@ -171,6 +190,50 @@ void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
   }
   
+
+//+------------------------------------------------------------------+
+string FormatBandMove(double current_value, double previous_value)
+  {
+   if(previous_value <= 0.0)
+      return "";
+
+   double diff = current_value - previous_value;
+
+   if(MathAbs(diff) < 0.005)
+      return " • 0.00";
+
+   if(diff > 0.0)
+      return StringFormat(" ▲ %.2f", MathAbs(diff));
+
+   return StringFormat(" ▼ %.2f", MathAbs(diff));
+  }
+
+//+------------------------------------------------------------------+
+void DrawFromStartLabel()
+  {
+   int x = TableXOffset;
+   int y = TableYOffset + (TableRowGap + 4) + 7 * TableRowGap + 8;
+
+   double diff = g_reference - g_start_reference;
+   string arrow = "•";
+   color clr = ColorMoveFlat;
+
+   if(diff > 0.0)
+     {
+      arrow = "▲";
+      clr = ColorMoveUp;
+     }
+   else if(diff < 0.0)
+     {
+      arrow = "▼";
+      clr = ColorMoveDown;
+     }
+
+   DrawLabel("VWAP_FROM_START",
+             StringFormat("From start: %s %.2f pts", arrow, MathAbs(diff)),
+             x, y, clr, TableFontSize);
+  }
+    
 //+------------------------------------------------------------------+
 void DrawBandTable()
   {
@@ -180,64 +243,74 @@ void DrawBandTable()
    DrawLabel("VWAP_TABLE_TITLE", "Bands", x, y, TableTextColor, TableFontSize + 1);
    y += TableRowGap + 4;
 
-   DrawLabel("VWAP_ROW_3P", StringFormat("+3σ %.2f", g_band3p), x, y, ColorBand3, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_2P", StringFormat("+2σ %.2f", g_band2p), x, y, ColorBand2, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_1P", StringFormat("+1σ %.2f", g_band1p), x, y, ColorBand1, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_V",  StringFormat("VW %.2f", g_reference), x, y, ColorVWAP, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_1N", StringFormat("-1σ %.2f", g_band1n), x, y, ColorBand1, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_2N", StringFormat("-2σ %.2f", g_band2n), x, y, ColorBand2, TableFontSize); y += TableRowGap;
-   DrawLabel("VWAP_ROW_3N", StringFormat("-3σ %.2f", g_band3n), x, y, ColorBand3, TableFontSize);
-  }  
+   DrawLabel("VWAP_ROW_3P",
+             StringFormat("+3σ %.2f%s", g_band3p, FormatBandMove(g_band3p, g_prev_band3p)),
+             x, y, ColorBand3, TableFontSize);
+   y += TableRowGap;
 
+   DrawLabel("VWAP_ROW_2P",
+             StringFormat("+2σ %.2f%s", g_band2p, FormatBandMove(g_band2p, g_prev_band2p)),
+             x, y, ColorBand2, TableFontSize);
+   y += TableRowGap;
 
-//+------------------------------------------------------------------+ 
-void DrawMoveLabel()
-  {
-   int x = TableXOffset;
-   int y = TableYOffset + (TableRowGap + 4) + 7 * TableRowGap + 8;
+   DrawLabel("VWAP_ROW_1P",
+             StringFormat("+1σ %.2f%s", g_band1p, FormatBandMove(g_band1p, g_prev_band1p)),
+             x, y, ColorBand1, TableFontSize);
+   y += TableRowGap;
 
-   string arrow = "•";
-   color move_clr = ColorMoveFlat;
+   DrawLabel("VWAP_ROW_V",
+             StringFormat("VW %.2f%s", g_reference, FormatBandMove(g_reference, g_prev_reference)),
+             x, y, ColorVWAP, TableFontSize);
+   y += TableRowGap;
 
-   if(g_move_points > 0.0)
-     {
-      arrow = "▲";
-      move_clr = ColorMoveUp;
-     }
-   else if(g_move_points < 0.0)
-     {
-      arrow = "▼";
-      move_clr = ColorMoveDown;
-     }
+   DrawLabel("VWAP_ROW_1N",
+             StringFormat("-1σ %.2f%s", g_band1n, FormatBandMove(g_band1n, g_prev_band1n)),
+             x, y, ColorBand1, TableFontSize);
+   y += TableRowGap;
 
-   DrawLabel("VWAP_MOVE_LABEL",
-             StringFormat("Move: %s %.2f pts", arrow, MathAbs(g_move_points)),
-             x, y, move_clr, TableFontSize);
+   DrawLabel("VWAP_ROW_2N",
+             StringFormat("-2σ %.2f%s", g_band2n, FormatBandMove(g_band2n, g_prev_band2n)),
+             x, y, ColorBand2, TableFontSize);
+   y += TableRowGap;
+
+   DrawLabel("VWAP_ROW_3N",
+             StringFormat("-3σ %.2f%s", g_band3n, FormatBandMove(g_band3n, g_prev_band3n)),
+             x, y, ColorBand3, TableFontSize);
   }
+
+
+//+------------------------------------------------------------------+
   
 //+------------------------------------------------------------------+
-void DrawMoveLabel()
+void DrawOverlay()
   {
-   int x = TableXOffset;
-   int y = TableYOffset + (TableRowGap + 4) + 7 * TableRowGap + 8;
-
-   string arrow = "•";
-   color move_clr = ColorMoveFlat;
-
-   if(g_move_points > 0.0)
+   if(ShowBands && g_reference > 0)
      {
-      arrow = "▲";
-      move_clr = ColorMoveUp;
-     }
-   else if(g_move_points < 0.0)
-     {
-      arrow = "▼";
-      move_clr = ColorMoveDown;
+      DrawHLine("VWAP_REF",   g_reference, ColorVWAP,  2, STYLE_SOLID);
+      DrawHLine("VWAP_1P",    g_band1p,    ColorBand1, 1, STYLE_DOT);
+      DrawHLine("VWAP_1N",    g_band1n,    ColorBand1, 1, STYLE_DOT);
+      DrawHLine("VWAP_2P",    g_band2p,    ColorBand2, 1, STYLE_DASH);
+      DrawHLine("VWAP_2N",    g_band2n,    ColorBand2, 1, STYLE_DASH);
+      DrawHLine("VWAP_3P",    g_band3p,    ColorBand3, 1, STYLE_DASHDOT);
+      DrawHLine("VWAP_3N",    g_band3n,    ColorBand3, 1, STYLE_DASHDOT);
      }
 
-   DrawLabel("VWAP_MOVE_LABEL",
-             StringFormat("Move: %s %.2f pts", arrow, MathAbs(g_move_points)),
-             x, y, move_clr, TableFontSize);
+   if(ShowBandTable && g_reference > 0)
+     {
+      DrawBandTable();
+      DrawFromStartLabel();
+     }
+
+   if(ShowSignal || ShowZScore)
+     {
+      string label = StringFormat(
+         "Zone: %s | Z: %.2f | Trend: %s\nP(MR): %.0f%%  Edge: %.2f\nSignal: %s",
+         g_zone, g_z_score, g_trend,
+         g_p_mr * 100, g_edge_gap,
+         g_signal_type
+      );
+      Comment(label);
+     }
   }
   
 //+------------------------------------------------------------------+
