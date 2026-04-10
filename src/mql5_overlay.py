@@ -62,6 +62,7 @@ double g_prev_band3p = 0, g_prev_band3n = 0;
 
 // session-start reference
 double g_start_reference = 0;
+double g_start_price = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -108,34 +109,72 @@ void ReadJsonState()
       content += FileReadString(handle);
    FileClose(handle);
 
-   // store previous values before overwriting
-   g_prev_reference = g_reference;
-   g_prev_band1p = g_band1p;
-   g_prev_band1n = g_band1n;
-   g_prev_band2p = g_band2p;
-   g_prev_band2n = g_band2n;
-   g_prev_band3p = g_band3p;
-   g_prev_band3n = g_band3n;
+   // read new values into temporaries first
+   double new_reference = ExtractDouble(content, "reference");
+   double new_sigma     = ExtractDouble(content, "sigma");
+   double new_z_score   = ExtractDouble(content, "z_score");
+   double new_p_mr      = ExtractDouble(content, "p_mr");
+   double new_edge_gap  = ExtractDouble(content, "edge_gap");
+   double new_band1p    = ExtractDouble(content, "band_1p");
+   double new_band1n    = ExtractDouble(content, "band_1n");
+   double new_band2p    = ExtractDouble(content, "band_2p");
+   double new_band2n    = ExtractDouble(content, "band_2n");
+   double new_band3p    = ExtractDouble(content, "band_3p");
+   double new_band3n    = ExtractDouble(content, "band_3n");
+   string new_zone      = ExtractString(content, "zone");
+   string new_signal    = ExtractString(content, "signal_type");
+   string new_trend     = ExtractString(content, "trend_bin");
 
-   // read new values
-   g_reference   = ExtractDouble(content, "reference");
-   g_sigma       = ExtractDouble(content, "sigma");
-   g_z_score     = ExtractDouble(content, "z_score");
-   g_p_mr        = ExtractDouble(content, "p_mr");
-   g_edge_gap    = ExtractDouble(content, "edge_gap");
-   g_band1p      = ExtractDouble(content, "band_1p");
-   g_band1n      = ExtractDouble(content, "band_1n");
-   g_band2p      = ExtractDouble(content, "band_2p");
-   g_band2n      = ExtractDouble(content, "band_2n");
-   g_band3p      = ExtractDouble(content, "band_3p");
-   g_band3n      = ExtractDouble(content, "band_3n");
-   g_zone        = ExtractString(content, "zone");
-   g_signal_type = ExtractString(content, "signal_type");
-   g_trend       = ExtractString(content, "trend_bin");
+   // set session-start reference once
+   if(g_start_reference <= 0.0 && new_reference > 0.0)
+      g_start_reference = new_reference;
 
-   // set start reference once
-   if(g_start_reference <= 0.0 && g_reference > 0.0)
-      g_start_reference = g_reference;
+   // only shift current -> previous if values actually changed
+   bool changed =
+      (MathAbs(new_reference - g_reference) > 0.000001) ||
+      (MathAbs(new_band1p - g_band1p) > 0.000001) ||
+      (MathAbs(new_band1n - g_band1n) > 0.000001) ||
+      (MathAbs(new_band2p - g_band2p) > 0.000001) ||
+      (MathAbs(new_band2n - g_band2n) > 0.000001) ||
+      (MathAbs(new_band3p - g_band3p) > 0.000001) ||
+      (MathAbs(new_band3n - g_band3n) > 0.000001);
+
+   if(changed)
+     {
+      g_prev_reference = g_reference;
+      g_prev_band1p = g_band1p;
+      g_prev_band1n = g_band1n;
+      g_prev_band2p = g_band2p;
+      g_prev_band2n = g_band2n;
+      g_prev_band3p = g_band3p;
+      g_prev_band3n = g_band3n;
+
+      g_reference   = new_reference;
+      g_sigma       = new_sigma;
+      g_z_score     = new_z_score;
+      g_p_mr        = new_p_mr;
+      g_edge_gap    = new_edge_gap;
+      g_band1p      = new_band1p;
+      g_band1n      = new_band1n;
+      g_band2p      = new_band2p;
+      g_band2n      = new_band2n;
+      g_band3p      = new_band3p;
+      g_band3n      = new_band3n;
+      g_zone        = new_zone;
+      g_signal_type = new_signal;
+      g_trend       = new_trend;
+     }
+   else
+     {
+      // still keep non-band fields fresh
+      g_sigma       = new_sigma;
+      g_z_score     = new_z_score;
+      g_p_mr        = new_p_mr;
+      g_edge_gap    = new_edge_gap;
+      g_zone        = new_zone;
+      g_signal_type = new_signal;
+      g_trend       = new_trend;
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -214,7 +253,13 @@ void DrawFromStartLabel()
    int x = TableXOffset;
    int y = TableYOffset + (TableRowGap + 4) + 7 * TableRowGap + 8;
 
-   double diff = g_reference - g_start_reference;
+   double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   if(g_start_price <= 0.0 && live_price > 0.0)
+      g_start_price = live_price;
+
+   double diff = live_price - g_start_price;
+
    string arrow = "•";
    color clr = ColorMoveFlat;
 
