@@ -145,8 +145,9 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
     if marginal_table is None:
         marginal_table = prob_table
 
-    output_path = Path("live_artifacts/live_state.json")
-    output_path.parent.mkdir(exist_ok=True)
+    mt5_files_dir = Path(mt5.terminal_info().data_path) / "MQL5" / "Files"
+    mt5_files_dir.mkdir(parents=True, exist_ok=True)
+    output_path = mt5_files_dir / "live_state.json"
 
     # ── Warm up engine ──
     warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
@@ -296,8 +297,9 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
     if marginal_table is None:
         marginal_table = prob_table
 
-    output_path = Path("live_artifacts/live_state.json")
-    output_path.parent.mkdir(exist_ok=True)
+    mt5_files_dir = Path(mt5.terminal_info().data_path) / "MQL5" / "Files"
+    mt5_files_dir.mkdir(parents=True, exist_ok=True)
+    output_path = mt5_files_dir / "live_state.json"
 
     # ── Warm up engine ──
     warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)

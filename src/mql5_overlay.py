@@ -359,43 +359,7 @@ void DrawOverlay()
   }
   
 //+------------------------------------------------------------------+
-void DrawOverlay()
-  {
-   g_last_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   g_move_points = g_last_price - g_reference;
 
-   if(ShowBands && g_reference > 0)
-     {
-      DrawHLine("VWAP_REF",   g_reference, ColorVWAP,  2, STYLE_SOLID);
-      DrawHLine("VWAP_1P",    g_band1p,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_1N",    g_band1n,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_2P",    g_band2p,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_2N",    g_band2n,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_3P",    g_band3p,    ColorBand3, 1, STYLE_DASHDOT);
-      DrawHLine("VWAP_3N",    g_band3n,    ColorBand3, 1, STYLE_DASHDOT);
-     }
-
-   if(ShowBandTable && g_reference > 0)
-     {
-      DrawBandTable();
-     }
-
-   if(ShowMoveLabel && g_reference > 0)
-     {
-      DrawMoveLabel();
-     }
-
-   if(ShowSignal || ShowZScore)
-     {
-      string label = StringFormat(
-         "Zone: %s | Z: %.2f | Trend: %s\nP(MR): %.0f%%  Edge: %.2f\nSignal: %s",
-         g_zone, g_z_score, g_trend,
-         g_p_mr * 100, g_edge_gap,
-         g_signal_type
-      );
-      Comment(label);
-     }
-  }
 //+------------------------------------------------------------------+
 '''
 
