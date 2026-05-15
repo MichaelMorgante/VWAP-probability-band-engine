@@ -10,6 +10,9 @@ class SignalResult:
     symbol:          str     = ''
     signal_type:     str     = 'NO_SIGNAL'   # MR_LONG, MR_SHORT, CONT_LONG, CONT_SHORT, NO_SIGNAL
     dominant:        str     = 'NEU'
+    setup_type:      str     = 'NEUTRAL'
+    signal_display:  str     = 'WAIT'
+    edge_gap:        float   = 0.0
     edge_gap:        float   = 0.0
     z_score:         float   = 0.0
     z_velocity:      float   = 0.0
@@ -48,11 +51,21 @@ def generate_signal(state, config: dict) -> SignalResult:
         signal_type = 'NO_SIGNAL'
         target_z    = 0.0
 
+    setup_type = {
+        'MR': 'MR',
+        'CONT': 'CONT',
+        'NEU': 'NEUTRAL'
+    }.get(dominant, 'NEUTRAL')
+
+    signal_display = signal_type if signal_type != 'NO_SIGNAL' else 'WAIT'
+
     return SignalResult(
         datetime        = state.datetime,
         symbol          = config.get('instrument', ''),
         signal_type     = signal_type,
         dominant        = dominant,
+        setup_type=setup_type,
+        signal_display  = signal_display,
         edge_gap        = edge_gap,
         z_score         = z,
         z_velocity      = state.z_velocity,
@@ -104,7 +117,8 @@ def regime_gate(signal: SignalResult, config: dict) -> SignalResult:
             reason  = f'regime_gate: CONT_SHORT requires trend=down + negative z_vel (got {trend}, {z_vel:.2f})'
 
     if blocked:
-        signal.signal_type  = 'NO_SIGNAL'
+        signal.signal_type = 'NO_SIGNAL'
+        signal.signal_display = 'WAIT'
         signal.suppressed_by = reason
     return signal
 
@@ -143,6 +157,7 @@ def apply_filters(signal: SignalResult, state, config: dict) -> SignalResult:
     for condition, reason in checks:
         if condition:
             signal.signal_type   = 'NO_SIGNAL'
+            signal.signal_display = 'WAIT'
             signal.suppressed_by = reason
             return signal
 
