@@ -128,7 +128,6 @@ void ReadJsonState()
    string new_signal    = ExtractString(content, "signal_type");
    string new_trend     = ExtractString(content, "trend_bin");
    string new_trend_display  = ExtractString(content, "trend_display");
-   string new_trend_display  = ExtractString(content, "trend_display");
    string new_setup_type     = ExtractString(content, "setup_type");
    string new_signal_display = ExtractString(content, "signal_display");
 
