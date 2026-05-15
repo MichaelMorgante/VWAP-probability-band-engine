@@ -61,12 +61,11 @@ def update_engine_state(state: EngineState, bar: dict,
     session   = bar.get('session_id') or (ts.date() if hasattr(ts, 'date') else ts)
 
     # ── Session reset ──
-    if session != state._session_date:
-        state._session_date     = session
-        state._cum_pv           = 0.0
-        state._cum_v            = 0.0
-        state.session_bar_count = 0   # reset warmup counter
-        state._ewma_var         = 0.0   # reset sigma at session open
+# ── Session tracking only: do NOT hard-reset VWAP at session boundary ──
+# ── Session tracking only: do NOT hard-reset VWAP at session boundary ──
+    if state._session_date is None:
+        state._session_date = session
+        state.session_bar_count = 0
 
     state.session_bar_count += 1
 
