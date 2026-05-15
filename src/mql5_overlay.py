@@ -48,6 +48,7 @@ input color ColorMoveFlat = clrSilver;
 
 // Internal state
 double g_reference = 0, g_sigma = 0, g_z_score = 0;
+double g_reference_shift_5 = 0;
 string g_zone = "", g_signal_type = "NO_SIGNAL", g_trend = "";
 double g_p_mr = 0, g_edge_gap = 0;
 double g_band1p = 0, g_band1n = 0;
@@ -111,6 +112,7 @@ void ReadJsonState()
 
    // read new values into temporaries first
    double new_reference = ExtractDouble(content, "reference");
+   double new_reference_shift_5 = ExtractDouble(content, "reference_shift_5");
    double new_sigma     = ExtractDouble(content, "sigma");
    double new_z_score   = ExtractDouble(content, "z_score");
    double new_p_mr      = ExtractDouble(content, "p_mr");
@@ -150,6 +152,7 @@ void ReadJsonState()
       g_prev_band3n = g_band3n;
 
       g_reference   = new_reference;
+      g_reference_shift_5 = new_reference_shift_5;
       g_sigma       = new_sigma;
       g_z_score     = new_z_score;
       g_p_mr        = new_p_mr;
@@ -167,6 +170,7 @@ void ReadJsonState()
    else
      {
       // still keep non-band fields fresh
+      g_reference_shift_5 = new_reference_shift_5;
       g_sigma       = new_sigma;
       g_z_score     = new_z_score;
       g_p_mr        = new_p_mr;
@@ -277,6 +281,26 @@ void DrawFromStartLabel()
    DrawLabel("VWAP_FROM_START",
              StringFormat("From start: %s %.2f pts", arrow, MathAbs(diff)),
              x, y, clr, TableFontSize);
+
+   y += TableRowGap;
+
+   string sigma_arrow = "•";
+   color sigma_clr = ColorMoveFlat;
+
+   if(g_reference_shift_5 > 0.0)
+     {
+      sigma_arrow = "▲";
+      sigma_clr = ColorMoveUp;
+     }
+   else if(g_reference_shift_5 < 0.0)
+     {
+      sigma_arrow = "▼";
+      sigma_clr = ColorMoveDown;
+     }
+
+   DrawLabel("VWAP_SIGMA5_SHIFT",
+             StringFormat("Σ5 VWAP:   %s %.2f pts", sigma_arrow, MathAbs(g_reference_shift_5)),
+             x, y, sigma_clr, TableFontSize);
   }
     
 //+------------------------------------------------------------------+

@@ -9,6 +9,18 @@ import pandas as pd
 from src.context_overlay import compute_context_vwap
 
 
+def compute_reference_shift(state, lookback: int = 5) -> float:
+    """
+    Return cumulative reference/VWAP shift over the last `lookback` bars.
+    Uses the engine's internal reference history if available.
+    """
+    ref_history = getattr(state, "_ref_history", None)
+
+    if ref_history is not None and len(ref_history) >= lookback + 1:
+        return float(state.reference - ref_history[-(lookback + 1)])
+
+    return 0.0
+
 # ── Context overlay: export bendy live trail for MT5 / external view ──
 def write_live_context(
     symbol: str,
@@ -216,11 +228,18 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
 
             # ── Live state JSON output (read by MQL5 overlay) ──
             probs = state.probabilities
+
+            reference_shift_5 = compute_reference_shift(
+                state,
+                lookback=int(config.get("vwap_shift_lookback", 5))
+            )
+
             live_state_dict = {
                 'datetime':      str(state.datetime),
                 'symbol':        symbol,
                 'close':         round(state.close, 5),
                 'reference':     round(state.reference, 5),
+                'reference_shift_5': round(reference_shift_5, 5),
                 'sigma':         round(state.sigma, 5),
                 'z_score':       round(state.z_score, 4),
                 'z_velocity':    round(state.z_velocity, 4),
@@ -406,13 +425,20 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
 
             warmup_df = warmup_df.tail(keep_bars).copy()
 
-            # ── Live state JSON output (straight execution lines) ──
+            # ── Live state JSON output (read by MQL5 overlay) ──
             probs = state.probabilities
+
+            reference_shift_5 = compute_reference_shift(
+                state,
+                lookback=int(config.get("vwap_shift_lookback", 5))
+            )
+
             live_state_dict = {
                 'datetime':      str(state.datetime),
                 'symbol':        symbol,
                 'close':         round(state.close, 5),
                 'reference':     round(state.reference, 5),
+                'reference_shift_5': round(reference_shift_5, 5),
                 'sigma':         round(state.sigma, 5),
                 'z_score':       round(state.z_score, 4),
                 'z_velocity':    round(state.z_velocity, 4),
