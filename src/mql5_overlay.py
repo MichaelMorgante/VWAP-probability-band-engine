@@ -50,6 +50,7 @@ input color ColorMoveFlat = clrSilver;
 double g_reference = 0, g_sigma = 0, g_z_score = 0;
 double g_reference_shift_5 = 0;
 string g_zone = "", g_signal_type = "NO_SIGNAL", g_trend = "";
+string g_trend_display = "FLAT", g_setup_type = "NEUTRAL", g_signal_display = "WAIT";
 double g_p_mr = 0, g_edge_gap = 0;
 double g_band1p = 0, g_band1n = 0;
 double g_band2p = 0, g_band2n = 0;
@@ -126,6 +127,10 @@ void ReadJsonState()
    string new_zone      = ExtractString(content, "zone");
    string new_signal    = ExtractString(content, "signal_type");
    string new_trend     = ExtractString(content, "trend_bin");
+   string new_trend_display  = ExtractString(content, "trend_display");
+   string new_trend_display  = ExtractString(content, "trend_display");
+   string new_setup_type     = ExtractString(content, "setup_type");
+   string new_signal_display = ExtractString(content, "signal_display");
 
    // set session-start reference once
    if(g_start_reference <= 0.0 && new_reference > 0.0)
@@ -166,6 +171,9 @@ void ReadJsonState()
       g_zone        = new_zone;
       g_signal_type = new_signal;
       g_trend       = new_trend;
+      g_trend_display  = new_trend_display;
+      g_setup_type     = new_setup_type;
+      g_signal_display = new_signal_display;
      }
    else
      {
@@ -178,6 +186,9 @@ void ReadJsonState()
       g_zone        = new_zone;
       g_signal_type = new_signal;
       g_trend       = new_trend;
+      g_trend_display  = new_trend_display;
+      g_setup_type     = new_setup_type;
+      g_signal_display = new_signal_display;
      }
   }
 
@@ -373,10 +384,11 @@ void DrawOverlay()
    if(ShowSignal || ShowZScore)
      {
       string label = StringFormat(
-         "Zone: %s | Z: %.2f | Trend: %s\nP(MR): %.0f%%  Edge: %.2f\nSignal: %s",
-         g_zone, g_z_score, g_trend,
-         g_p_mr * 100, g_edge_gap,
-         g_signal_type
+        "Zone: %s | Z: %.2f\nTrend: %s | Setup: %s\nP(MR): %.0f%%  Edge: %.2f\nSignal: %s",
+        g_zone, g_z_score,
+        g_trend_display, g_setup_type,
+        g_p_mr * 100, g_edge_gap,
+        g_signal_display
       );
       Comment(label);
      }

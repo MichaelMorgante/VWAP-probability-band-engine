@@ -234,6 +234,32 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 lookback=int(config.get("vwap_shift_lookback", 5))
             )
 
+            raw_trend = state.context.get('trend_bin', 'flat')
+
+            trend_display = {
+                'up': 'BULLISH',
+                'down': 'BEARISH',
+                'flat': 'FLAT'
+            }.get(raw_trend, 'FLAT')
+
+            setup_display = getattr(sig, 'setup_type', None)
+            if setup_display is None:
+                setup_display = probs.get('dominant', 'NEU')
+
+            setup_display = {
+                'MR': 'MR',
+                'CONT': 'CONT',
+                'NEU': 'NEUTRAL',
+                'NEUTRAL': 'NEUTRAL'
+            }.get(setup_display, 'NEUTRAL')
+
+            signal_display = getattr(sig, 'signal_display', None)
+            if signal_display is None:
+                signal_display = sig.signal_type
+
+            if signal_display == 'NO_SIGNAL':
+                signal_display = 'WAIT'
+
             live_state_dict = {
                 'datetime':      str(state.datetime),
                 'symbol':        symbol,
@@ -245,6 +271,9 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 'z_velocity':    round(state.z_velocity, 4),
                 'zone':          state.zone,
                 'trend_bin':     state.context.get('trend_bin', ''),
+                'trend_display': trend_display,
+                'setup_type': setup_display,
+                'signal_display': signal_display,
                 'volume_bin':    state.context.get('volume_bin', ''),
                 'time_bin':      state.context.get('time_bin', ''),
                 'p_mr':          round(probs.get('MR', {}).get('prob', 0), 4) if isinstance(probs.get('MR'), dict) else 0,
@@ -433,6 +462,32 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
                 lookback=int(config.get("vwap_shift_lookback", 5))
             )
 
+            raw_trend = state.context.get('trend_bin', 'flat')
+
+            trend_display = {
+                'up': 'BULLISH',
+                'down': 'BEARISH',
+                'flat': 'FLAT'
+            }.get(raw_trend, 'FLAT')
+
+            setup_display = getattr(sig, 'setup_type', None)
+            if setup_display is None:
+                setup_display = probs.get('dominant', 'NEU')
+
+            setup_display = {
+                'MR': 'MR',
+                'CONT': 'CONT',
+                'NEU': 'NEUTRAL',
+                'NEUTRAL': 'NEUTRAL'
+            }.get(setup_display, 'NEUTRAL')
+
+            signal_display = getattr(sig, 'signal_display', None)
+            if signal_display is None:
+                signal_display = sig.signal_type
+
+            if signal_display == 'NO_SIGNAL':
+                signal_display = 'WAIT'
+
             live_state_dict = {
                 'datetime':      str(state.datetime),
                 'symbol':        symbol,
@@ -444,6 +499,9 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
                 'z_velocity':    round(state.z_velocity, 4),
                 'zone':          state.zone,
                 'trend_bin':     state.context.get('trend_bin', ''),
+                'trend_display': trend_display,
+                'setup_type': setup_display,
+                'signal_display': signal_display,
                 'volume_bin':    state.context.get('volume_bin', ''),
                 'time_bin':      state.context.get('time_bin', ''),
                 'p_mr':          round(probs.get('MR', {}).get('prob', 0), 4) if isinstance(probs.get('MR'), dict) else 0,
