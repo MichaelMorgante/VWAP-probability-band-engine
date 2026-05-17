@@ -158,10 +158,12 @@ It:
 - plots overlays and probability heatmaps,
 - exports research artifacts.
 
-### `replay_tradingview.ipynb`
+### `replay_python.ipynb`
 Replay notebook.
 
-It steps through historical data one bar at a time with no look-ahead, simulating the information state that would have been available at bar $t$.
+Python replay notebook.
+
+It steps through historical data one bar at a time with no look-ahead, using the same engine state transition as live monitoring. This is for validating replay behaviour inside Python before building any TradingView/Pine overlay. Once loaded into TradingView, we can backtest by simulating the information state that would have been available at bar $t$.
 
 ### `live_trading.ipynb`
 Live MT5 notebook.
@@ -191,7 +193,7 @@ VWAP-probability-band-engine/
 │   └── states/
 ├── notebooks/
 │   ├── backtest_research.ipynb
-│   ├── replay_tradingview.ipynb
+│   ├── replay_python.ipynb
 │   └── live_trading.ipynb
 ├── src/
 │   ├── calibration.py
