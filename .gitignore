@@ -8,3 +8,6 @@ data/snapshots/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Generated replay outputs
+artifacts/tables/replay_output.parquet
