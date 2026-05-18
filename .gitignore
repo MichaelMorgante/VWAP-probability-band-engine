@@ -11,3 +11,5 @@ htmlcov/
 
 # Generated replay outputs
 artifacts/tables/replay_output.parquet
+# Large local historical data
+data/historical/US100_cash_M1_NY_session_1y.csv
