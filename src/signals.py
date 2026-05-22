@@ -18,6 +18,7 @@ class SignalResult:
     z_velocity:      float   = 0.0
     zone:            str     = 'Z0'
     trend_bin:       str     = 'flat'
+    bias_display: str = 'NEUTRAL'
     p_mr:            float   = 0.0
     p_cont:          float   = 0.0
     p_neu:           float   = 0.0
@@ -71,6 +72,7 @@ def generate_signal(state, config: dict) -> SignalResult:
         z_velocity      = state.z_velocity,
         zone            = state.zone,
         trend_bin       = state.context.get('trend_bin', 'flat'),
+        bias_display    = state.context.get('bias_display', 'NEUTRAL'),
         p_mr            = p_mr,
         p_cont          = p_cont,
         p_neu           = p_neu,
@@ -93,6 +95,7 @@ def regime_gate(signal: SignalResult, config: dict) -> SignalResult:
         return signal
 
     trend = signal.trend_bin
+    bias  = signal.bias_display
     z_vel = signal.z_velocity
 
     blocked = False
@@ -107,24 +110,30 @@ def regime_gate(signal: SignalResult, config: dict) -> SignalResult:
         reason  = 'regime_gate: MR_LONG suppressed, trend=down'
 
     elif signal.signal_type == 'CONT_LONG':
-        # Rough live context: allow continuation long unless trend is clearly against it
-        # or z-score momentum is strongly reversing.
-        if trend == 'down':
+        # Allow rough continuation long if price bias is bullish,
+        # unless trend is clearly bearish or momentum is strongly reversing.
+        if trend == 'down' and bias != 'BULLISH':
             blocked = True
-            reason = 'regime_gate: CONT_LONG blocked because trend=down'
+            reason  = f'regime_gate: CONT_LONG blocked because trend=down and bias={bias}'
+        elif bias == 'BEARISH':
+            blocked = True
+            reason  = f'regime_gate: CONT_LONG blocked because bias={bias}'
         elif z_vel < -0.20:
             blocked = True
-            reason = f'regime_gate: CONT_LONG blocked because z_vel strongly negative ({z_vel:.2f})'
+            reason  = f'regime_gate: CONT_LONG blocked because z_vel strongly negative ({z_vel:.2f})'
 
     elif signal.signal_type == 'CONT_SHORT':
-        # Rough live context: allow continuation short unless trend is clearly against it
-        # or z-score momentum is strongly reversing.
-        if trend == 'up':
+        # Allow rough continuation short if price bias is bearish,
+        # unless trend is clearly bullish or momentum is strongly reversing.
+        if trend == 'up' and bias != 'BEARISH':
             blocked = True
-            reason = 'regime_gate: CONT_SHORT blocked because trend=up'
+            reason  = f'regime_gate: CONT_SHORT blocked because trend=up and bias={bias}'
+        elif bias == 'BULLISH':
+            blocked = True
+            reason  = f'regime_gate: CONT_SHORT blocked because bias={bias}'
         elif z_vel > 0.20:
             blocked = True
-            reason = f'regime_gate: CONT_SHORT blocked because z_vel strongly positive ({z_vel:.2f})'
+            reason  = f'regime_gate: CONT_SHORT blocked because z_vel strongly positive ({z_vel:.2f})'
 
     if blocked:
         signal.signal_type = 'NO_SIGNAL'
