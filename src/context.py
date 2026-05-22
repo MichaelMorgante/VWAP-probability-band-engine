@@ -13,9 +13,11 @@ def compute_context(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     k = config['slope_lookback']
     slope = (df['reference'] - df['reference'].shift(k)) / (k * df['sigma'])
     ctx['trend_raw'] = slope
+    
+    trend_threshold = config.get('trend_slope_threshold', 0.08)
     ctx['trend_bin'] = pd.cut(
         slope,
-        bins=[-np.inf, -0.15, 0.15, np.inf],
+        bins=[-np.inf, -trend_threshold, trend_threshold, np.inf],
         labels=['down', 'flat', 'up']
     ).astype(str)
 

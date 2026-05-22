@@ -104,9 +104,11 @@ def update_engine_state(state: EngineState, bar: dict,
     # ── Context ──
     state._ref_history.append(reference)
     k = config['slope_lookback']
+    
+    trend_threshold = config.get('trend_slope_threshold', 0.08)
     if len(state._ref_history) >= k:
-        slope     = (reference - state._ref_history[-k]) / (k * sigma)
-        trend_bin = 'up' if slope > 0.15 else ('down' if slope < -0.15 else 'flat')
+        slope = (reference - state._ref_history[-k]) / (k * sigma)
+        trend_bin = 'up' if slope > trend_threshold else ('down' if slope < -trend_threshold else 'flat')
     else:
         trend_bin = 'flat'
 
