@@ -13,7 +13,6 @@ class SignalResult:
     setup_type:      str     = 'NEUTRAL'
     signal_display:  str     = 'WAIT'
     edge_gap:        float   = 0.0
-    edge_gap:        float   = 0.0
     z_score:         float   = 0.0
     z_velocity:      float   = 0.0
     zone:            str     = 'Z0'
