@@ -40,6 +40,7 @@ CONFIG = {
     'slope_lookback': 20,
     'volume_ema_span': 20,
     'trend_slope_threshold': 0.08,
+    'bias_z_threshold': 0.50,
 
     # Minimum observations to trust a probability estimate
     'min_sample_count': 100,

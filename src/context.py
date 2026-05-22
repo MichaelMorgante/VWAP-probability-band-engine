@@ -21,6 +21,21 @@ def compute_context(df: pd.DataFrame, config: dict) -> pd.DataFrame:
         labels=['down', 'flat', 'up']
     ).astype(str)
 
+    # ── 1b. Price-location bias relative to VWAP/reference ──
+    bias_threshold = config.get('bias_z_threshold', 0.50)
+
+    ctx['bias_display'] = np.select(
+        [
+            df['z_score'] >= bias_threshold,
+            df['z_score'] <= -bias_threshold
+        ],
+        [
+            'BULLISH',
+            'BEARISH'
+        ],
+        default='NEUTRAL'
+    )
+
     # ── 2. Volume regime ──
     vol_ema = df['tick_volume'].ewm(span=config['volume_ema_span'], adjust=False).mean()
     vol_ratio = df['tick_volume'] / vol_ema

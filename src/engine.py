@@ -112,6 +112,15 @@ def update_engine_state(state: EngineState, bar: dict,
     else:
         trend_bin = 'flat'
 
+    bias_threshold = config.get('bias_z_threshold', 0.50)
+
+    if z_score >= bias_threshold:
+        bias_display = 'BULLISH'
+    elif z_score <= -bias_threshold:
+        bias_display = 'BEARISH'
+    else:
+        bias_display = 'NEUTRAL'
+
     vol_alpha      = 2 / (config['volume_ema_span'] + 1)
     state._vol_ema = (volume * vol_alpha + state._vol_ema * (1 - vol_alpha)
                       if state.bar_index > 0 else volume)
@@ -141,6 +150,7 @@ def update_engine_state(state: EngineState, bar: dict,
         'volume_bin':     volume_bin,
         'time_bin':       time_bin,
         'z_velocity_bin': z_vel_bin,
+        'bias_display': bias_display,
     }
 
     # ── Probability lookup (new v2 with shrinkage) ──
