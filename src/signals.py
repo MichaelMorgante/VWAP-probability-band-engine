@@ -86,8 +86,8 @@ def regime_gate(signal: SignalResult, config: dict) -> SignalResult:
     Rules:
     - MR_SHORT only allowed when trend is flat or down
     - MR_LONG  only allowed when trend is flat or up
-    - CONT_LONG  only allowed when trend is up   AND z_velocity is extending
-    - CONT_SHORT only allowed when trend is down  AND z_velocity is extending
+    - CONT_LONG blocked when trend is clearly down or z_velocity strongly reverses
+    - CONT_SHORT blocked when trend is clearly up or z_velocity strongly reverses
     """
     if signal.signal_type == 'NO_SIGNAL':
         return signal
@@ -107,14 +107,24 @@ def regime_gate(signal: SignalResult, config: dict) -> SignalResult:
         reason  = 'regime_gate: MR_LONG suppressed, trend=down'
 
     elif signal.signal_type == 'CONT_LONG':
-        if trend != 'up' or z_vel <= 0:
+        # Rough live context: allow continuation long unless trend is clearly against it
+        # or z-score momentum is strongly reversing.
+        if trend == 'down':
             blocked = True
-            reason  = f'regime_gate: CONT_LONG requires trend=up + positive z_vel (got {trend}, {z_vel:.2f})'
+            reason = 'regime_gate: CONT_LONG blocked because trend=down'
+        elif z_vel < -0.20:
+            blocked = True
+            reason = f'regime_gate: CONT_LONG blocked because z_vel strongly negative ({z_vel:.2f})'
 
     elif signal.signal_type == 'CONT_SHORT':
-        if trend != 'down' or z_vel >= 0:
+        # Rough live context: allow continuation short unless trend is clearly against it
+        # or z-score momentum is strongly reversing.
+        if trend == 'up':
             blocked = True
-            reason  = f'regime_gate: CONT_SHORT requires trend=down + negative z_vel (got {trend}, {z_vel:.2f})'
+            reason = 'regime_gate: CONT_SHORT blocked because trend=up'
+        elif z_vel > 0.20:
+            blocked = True
+            reason = f'regime_gate: CONT_SHORT blocked because z_vel strongly positive ({z_vel:.2f})'
 
     if blocked:
         signal.signal_type = 'NO_SIGNAL'
@@ -131,8 +141,7 @@ def apply_filters(signal: SignalResult, state, config: dict) -> SignalResult:
     1. Edge gap must exceed minimum threshold
     2. Must be past session warmup period
     3. |z_score| must exceed minimum to avoid trading Z0 noise
-    4. Signal must be in zones Z2 or Z3 (Z1 trades generally have weaker edge)
-    5. time_bin must not be dead_hours
+    4. time_bin must not be dead_hours
     """
     if signal.signal_type == 'NO_SIGNAL':
         return signal
@@ -147,8 +156,8 @@ def apply_filters(signal: SignalResult, state, config: dict) -> SignalResult:
         (abs(signal.z_score) < config['min_signal_zscore'],
          f'filter: |z| {abs(signal.z_score):.2f} < min {config["min_signal_zscore"]}'),
 
-        (signal.zone in ('Z0', 'Z1+', 'Z1-'),
-         f'filter: zone {signal.zone} excluded (only Z2/Z3 zones accepted)'),
+        #(signal.zone in ('Z0', 'Z1+', 'Z1-'),
+        # f'filter: zone {signal.zone} excluded (only Z2/Z3 zones accepted)'),
 
         (state.context.get('time_bin') == 'dead_hours',
          'filter: dead_hours session segment'),
