@@ -48,3 +48,4 @@ MetaTrader5
 jupyter
 ipykernel
 notebook
+pyarrow
