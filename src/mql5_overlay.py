@@ -33,7 +33,6 @@ input int  TableXOffset   = 205;
 input int  TableYOffset   = 22;
 input int  TableRowGap    = 16;
 input int  TableFontSize  = 10;
-input int  TableValueXOffset = 92;
 input color TableTextColor = clrWhite;
 
 // Band colours
@@ -50,9 +49,7 @@ input color ColorSessionLabel = clrMediumPurple;
 
 // Candle countdown
 input bool ShowCandleCountdown = true;
-input int CountdownWarningSeconds = 10;
 input color ColorCountdownNormal = clrWhite;
-input color ColorCountdownWarning = clrRed;
 
 // Session open anchors
 input bool AutoSessionDST = true;
@@ -87,7 +84,7 @@ double g_prev_band3p = 0, g_prev_band3n = 0;
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   EventSetTimer(1); // poll JSON every 5 seconds
+   EventSetTimer(1); // poll JSON every 1 seconds
    return(INIT_SUCCEEDED);
   }
 
@@ -261,31 +258,6 @@ void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-  }
-
-//+------------------------------------------------------------------+
-void DrawLabelValueRow(string label_object,
-                       string value_object,
-                       string label_text,
-                       string value_text,
-                       int x,
-                       int y,
-                       color value_clr,
-                       int font_size)
-  {
-   DrawLabel(label_object,
-             label_text,
-             x,
-             y,
-             TableTextColor,
-             font_size);
-
-   DrawLabel(value_object,
-             value_text,
-             x - TableValueXOffset,
-             y,
-             value_clr,
-             font_size);
   }
   
 
@@ -508,31 +480,30 @@ double GetSessionOpenPrice(bool is_new_york)
 //+------------------------------------------------------------------+
 void DrawMoveLabel(string object_name, string label_text, double anchor_price, int x, int y)
   {
-   string value_text = "• 0.00 pts";
-
-   if(anchor_price > 0.0)
+   if(anchor_price <= 0.0)
      {
-      double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double diff = live_price - anchor_price;
-
-      string arrow = "•";
-
-      if(diff > 0.0)
-         arrow = "▲";
-      else if(diff < 0.0)
-         arrow = "▼";
-
-      value_text = StringFormat("%s %.2f pts", arrow, MathAbs(diff));
+      DrawLabel(object_name, label_text + ": • 0.00 pts", x, y, ColorSessionLabel, TableFontSize);
+      return;
      }
 
-   DrawLabelValueRow(object_name + "_LABEL",
-                     object_name + "_VALUE",
-                     label_text + ":",
-                     value_text,
-                     x,
-                     y,
-                     ColorSessionLabel,
-                     TableFontSize);
+   double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double diff = live_price - anchor_price;
+
+   string arrow = "•";
+
+   if(diff > 0.0)
+      arrow = "▲";
+   else if(diff < 0.0)
+      arrow = "▼";
+
+   DrawLabel(
+      object_name,
+      StringFormat("%s: %s %.2f pts", label_text, arrow, MathAbs(diff)),
+      x,
+      y,
+      ColorSessionLabel,
+      TableFontSize
+   );
   }
   
 //+------------------------------------------------------------------+
@@ -557,14 +528,9 @@ void DrawFromStartLabel()
       sigma_clr = ColorMoveDown;
      }
 
-   DrawLabelValueRow("VWAP_SIGMA5_SHIFT_LABEL",
-                     "VWAP_SIGMA5_SHIFT_VALUE",
-                     "Σ5 VWAP:",
-                     StringFormat("%s %.2f pts", sigma_arrow, MathAbs(g_reference_shift_5)),
-                     x,
-                     y,
-                     sigma_clr,
-                     TableFontSize);
+   DrawLabel("VWAP_SIGMA5_SHIFT",
+             StringFormat("Σ5 VWAP:   %s %.2f pts", sigma_arrow, MathAbs(g_reference_shift_5)),
+             x, y, sigma_clr, TableFontSize);
 
    y += TableRowGap;
 
@@ -576,7 +542,6 @@ void DrawFromStartLabel()
    double ny_open_price = GetSessionOpenPrice(true);
    DrawMoveLabel("VWAP_NY_OPEN", "NY open", ny_open_price, x, y);
   }
-    
 
 //+------------------------------------------------------------------+
 void DrawCandleCountdownLabel()
@@ -619,14 +584,12 @@ void DrawCandleCountdownLabel()
       countdown_clr = ColorMoveDown;
      }
 
-   DrawLabelValueRow("VWAP_CANDLE_COUNTDOWN_LABEL",
-                     "VWAP_CANDLE_COUNTDOWN_VALUE",
-                     "Candle close:",
-                     StringFormat("%02d:%02d %s", mins, secs, arrow),
-                     TableXOffset,
-                     TableYOffset,
-                     countdown_clr,
-                     TableFontSize);
+   DrawLabel("VWAP_CANDLE_COUNTDOWN",
+             StringFormat("Candle close: %02d:%02d %s", mins, secs, arrow),
+             TableXOffset,
+             TableYOffset,
+             countdown_clr,
+             TableFontSize);
   }
   
 //+------------------------------------------------------------------+
