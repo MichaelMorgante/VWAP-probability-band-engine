@@ -45,6 +45,11 @@ input color ColorSignalCont = clrOrangeRed;
 input color ColorMoveUp   = clrLimeGreen;
 input color ColorMoveDown = clrTomato;
 input color ColorMoveFlat = clrSilver;
+// Candle countdown
+input bool ShowCandleCountdown = true;
+input int CountdownWarningSeconds = 10;
+input color ColorCountdownNormal = clrWhite;
+input color ColorCountdownWarning = clrRed;
 
 // Internal state
 double g_reference = 0, g_sigma = 0, g_z_score = 0;
@@ -70,7 +75,7 @@ double g_start_price = 0;
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   EventSetTimer(5); // poll JSON every 5 seconds
+   EventSetTimer(1); // poll JSON every 5 seconds
    return(INIT_SUCCEEDED);
   }
 
@@ -272,7 +277,7 @@ string FormatBandMove(double current_value, double previous_value)
 void DrawFromStartLabel()
   {
    int x = TableXOffset;
-   int y = TableYOffset + (TableRowGap + 4) + 7 * TableRowGap + 8;
+   int y = TableYOffset + (TableRowGap + 6) + (TableRowGap + 4) + 7 * TableRowGap + 8;
 
    double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
@@ -320,11 +325,59 @@ void DrawFromStartLabel()
              x, y, sigma_clr, TableFontSize);
   }
     
+
+//+------------------------------------------------------------------+
+void DrawCandleCountdownLabel()
+{
+    if(!ShowCandleCountdown)
+        return;
+
+    int period_seconds = PeriodSeconds(_Period);
+    if(period_seconds <= 0)
+        return;
+
+    datetime candle_open_time = iTime(_Symbol, _Period, 0);
+    datetime now_time = TimeCurrent();
+
+    int elapsed = (int)(now_time - candle_open_time);
+    int remaining = period_seconds - elapsed;
+
+    if(remaining < 0)
+        remaining = 0;
+    if(remaining > period_seconds)
+        remaining = period_seconds;
+
+    int mins = remaining / 60;
+    int secs = remaining % 60;
+
+    double candle_open = iOpen(_Symbol, _Period, 0);
+    double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+    string arrow = "•";
+    if(live_price > candle_open)
+        arrow = "▲";
+    else if(live_price < candle_open)
+        arrow = "▼";
+
+    color countdown_clr = ColorCountdownNormal;
+    if(remaining <= CountdownWarningSeconds)
+        countdown_clr = ColorCountdownWarning;
+
+    DrawLabel(
+        "VWAP_CANDLE_COUNTDOWN",
+        StringFormat("Candle close: %02d:%02d %s", mins, secs, arrow),
+        TableXOffset,
+        TableYOffset,
+        countdown_clr,
+        TableFontSize
+    );
+}
+  
 //+------------------------------------------------------------------+
 void DrawBandTable()
   {
    int x = TableXOffset;
-   int y = TableYOffset;
+   int y = TableYOffset + TableRowGap + 6;
 
    DrawLabel("VWAP_TABLE_TITLE", "Bands", x, y, TableTextColor, TableFontSize + 1);
    y += TableRowGap + 4;
@@ -383,6 +436,7 @@ void DrawOverlay()
 
    if(ShowBandTable && g_reference > 0)
      {
+      DrawCandleCountdownLabel();
       DrawBandTable();
       DrawFromStartLabel();
      }
