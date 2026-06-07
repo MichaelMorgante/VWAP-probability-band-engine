@@ -548,58 +548,54 @@ void DrawFromStartLabel()
 
 //+------------------------------------------------------------------+
 void DrawCandleCountdownLabel()
-{
-    if(!ShowCandleCountdown)
-        return;
+  {
+   if(!ShowCandleCountdown)
+      return;
 
-    int period_seconds = PeriodSeconds(_Period);
-    if(period_seconds <= 0)
-        return;
+   int period_seconds = PeriodSeconds(_Period);
+   if(period_seconds <= 0)
+      return;
 
-    datetime candle_open_time = iTime(_Symbol, _Period, 0);
-    datetime now_time = TimeCurrent();
+   datetime candle_open_time = iTime(_Symbol, _Period, 0);
+   datetime now_time = TimeCurrent();
 
-    int elapsed = (int)(now_time - candle_open_time);
-    int remaining = period_seconds - elapsed;
+   int elapsed = (int)(now_time - candle_open_time);
+   int remaining = period_seconds - elapsed;
 
-    if(remaining < 0)
-        remaining = 0;
-    if(remaining > period_seconds)
-        remaining = period_seconds;
+   if(remaining < 0)
+      remaining = 0;
+   if(remaining > period_seconds)
+      remaining = period_seconds;
 
-    int mins = remaining / 60;
-    int secs = remaining % 60;
+   int mins = remaining / 60;
+   int secs = remaining % 60;
 
-    double candle_open = iOpen(_Symbol, _Period, 0);
-    double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double candle_open = iOpen(_Symbol, _Period, 0);
+   double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-    string arrow = "•";
-    color countdown_clr = ColorCountdownNormal;
+   string arrow = "•";
+   color countdown_clr = ColorCountdownNormal;
 
-    if(live_price > candle_open)
-    {
-        arrow = "▲";
-        countdown_clr = ColorMoveUp;
-    }
-    else if(live_price < candle_open)
-    {
-        arrow = "▼";
-        countdown_clr = ColorMoveDown;
-    }
+   if(live_price > candle_open)
+     {
+      arrow = "▲";
+      countdown_clr = ColorMoveUp;
+     }
+   else if(live_price < candle_open)
+     {
+      arrow = "▼";
+      countdown_clr = ColorMoveDown;
+     }
 
-    // Optional: final warning seconds become red regardless.
-    if(remaining <= CountdownWarningSeconds)
-        countdown_clr = ColorCountdownWarning;
-
-    DrawLabel(
-        "VWAP_CANDLE_COUNTDOWN",
-        StringFormat("Candle close: %02d:%02d %s", mins, secs, arrow),
-        TableXOffset,
-        TableYOffset,
-        countdown_clr,
-        TableFontSize
-    );
-}
+   DrawLabel(
+      "VWAP_CANDLE_COUNTDOWN",
+      StringFormat("Candle close: %02d:%02d %s", mins, secs, arrow),
+      TableXOffset,
+      TableYOffset,
+      countdown_clr,
+      TableFontSize
+   );
+  }
   
 //+------------------------------------------------------------------+
 void DrawBandTable()
