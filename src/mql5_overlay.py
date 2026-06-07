@@ -45,11 +45,23 @@ input color ColorSignalCont = clrOrangeRed;
 input color ColorMoveUp   = clrLimeGreen;
 input color ColorMoveDown = clrTomato;
 input color ColorMoveFlat = clrSilver;
+
 // Candle countdown
 input bool ShowCandleCountdown = true;
 input int CountdownWarningSeconds = 10;
 input color ColorCountdownNormal = clrWhite;
 input color ColorCountdownWarning = clrRed;
+
+// Session open anchors
+input bool AutoSessionDST = true;
+input int BrokerUTCOffsetWinter = 2;
+input int BrokerUTCOffsetSummer = 3;
+
+// Manual fallback, using broker/server time
+input int ManualLondonOpenHour = 10;
+input int ManualLondonOpenMinute = 0;
+input int ManualNewYorkOpenHour = 16;
+input int ManualNewYorkOpenMinute = 30;
 
 // Internal state
 double g_reference = 0, g_sigma = 0, g_z_score = 0;
@@ -68,9 +80,7 @@ double g_prev_band1p = 0, g_prev_band1n = 0;
 double g_prev_band2p = 0, g_prev_band2n = 0;
 double g_prev_band3p = 0, g_prev_band3n = 0;
 
-// session-start reference
-double g_start_reference = 0;
-double g_start_price = 0;
+// session-open anchors are calculated from London/NY session times
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -138,10 +148,6 @@ void ReadJsonState()
    string new_setup_type     = ExtractString(content, "setup_type");
    string new_signal_display = ExtractString(content, "signal_display");
    string new_suppressed_by  = ExtractString(content, "suppressed_by");
-
-   // set session-start reference once
-   if(g_start_reference <= 0.0 && new_reference > 0.0)
-      g_start_reference = new_reference;
 
    // only shift current -> previous if values actually changed
    bool changed =
@@ -274,37 +280,230 @@ string FormatBandMove(double current_value, double previous_value)
   }
 
 //+------------------------------------------------------------------+
+bool IsLeapYear(int year)
+{
+    return ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0));
+}
+
+//+------------------------------------------------------------------+
+int DaysInMonth(int year, int month)
+{
+    if(month == 2)
+        return IsLeapYear(year) ? 29 : 28;
+
+    if(month == 4 || month == 6 || month == 9 || month == 11)
+        return 30;
+
+    return 31;
+}
+
+//+------------------------------------------------------------------+
+int DayOfWeek(int year, int month, int day)
+{
+    MqlDateTime dt;
+    dt.year = year;
+    dt.mon = month;
+    dt.day = day;
+    dt.hour = 0;
+    dt.min = 0;
+    dt.sec = 0;
+
+    datetime t = StructToTime(dt);
+    MqlDateTime out;
+    TimeToStruct(t, out);
+
+    return out.day_of_week; // Sunday = 0
+}
+
+//+------------------------------------------------------------------+
+int LastSundayOfMonth(int year, int month)
+{
+    int last_day = DaysInMonth(year, month);
+    int dow = DayOfWeek(year, month, last_day);
+
+    return last_day - dow;
+}
+
+//+------------------------------------------------------------------+
+int NthSundayOfMonth(int year, int month, int n)
+{
+    int dow_first = DayOfWeek(year, month, 1);
+    int first_sunday = 1 + ((7 - dow_first) % 7);
+
+    return first_sunday + 7 * (n - 1);
+}
+
+//+------------------------------------------------------------------+
+bool IsDateOnOrAfter(int month, int day, int start_month, int start_day)
+{
+    if(month > start_month)
+        return true;
+    if(month == start_month && day >= start_day)
+        return true;
+    return false;
+}
+
+//+------------------------------------------------------------------+
+bool IsDateBefore(int month, int day, int end_month, int end_day)
+{
+    if(month < end_month)
+        return true;
+    if(month == end_month && day < end_day)
+        return true;
+    return false;
+}
+
+//+------------------------------------------------------------------+
+bool IsUKDST(datetime t)
+{
+    MqlDateTime dt;
+    TimeToStruct(t, dt);
+
+    int start_day = LastSundayOfMonth(dt.year, 3);
+    int end_day = LastSundayOfMonth(dt.year, 10);
+
+    bool after_start = IsDateOnOrAfter(dt.mon, dt.day, 3, start_day);
+    bool before_end = IsDateBefore(dt.mon, dt.day, 10, end_day);
+
+    return after_start && before_end;
+}
+
+//+------------------------------------------------------------------+
+bool IsUSDST(datetime t)
+{
+    MqlDateTime dt;
+    TimeToStruct(t, dt);
+
+    int start_day = NthSundayOfMonth(dt.year, 3, 2);
+    int end_day = NthSundayOfMonth(dt.year, 11, 1);
+
+    bool after_start = IsDateOnOrAfter(dt.mon, dt.day, 3, start_day);
+    bool before_end = IsDateBefore(dt.mon, dt.day, 11, end_day);
+
+    return after_start && before_end;
+}
+
+//+------------------------------------------------------------------+
+int GetBrokerUTCOffsetHours(datetime t)
+{
+    if(!AutoSessionDST)
+        return BrokerUTCOffsetSummer;
+
+    return IsUKDST(t) ? BrokerUTCOffsetSummer : BrokerUTCOffsetWinter;
+}
+
+//+------------------------------------------------------------------+
+datetime MidnightForDate(datetime t)
+{
+    MqlDateTime dt;
+    TimeToStruct(t, dt);
+
+    dt.hour = 0;
+    dt.min = 0;
+    dt.sec = 0;
+
+    return StructToTime(dt);
+}
+
+//+------------------------------------------------------------------+
+datetime GetSessionOpenServerTime(datetime base_time, bool is_new_york)
+{
+    if(!AutoSessionDST)
+    {
+        int manual_hour = is_new_york ? ManualNewYorkOpenHour : ManualLondonOpenHour;
+        int manual_minute = is_new_york ? ManualNewYorkOpenMinute : ManualLondonOpenMinute;
+
+        return MidnightForDate(base_time) + manual_hour * 3600 + manual_minute * 60;
+    }
+
+    int broker_offset = GetBrokerUTCOffsetHours(base_time);
+
+    int utc_minutes = 0;
+
+    if(is_new_york)
+    {
+        // NYSE open = 09:30 New York time.
+        // New York is UTC-5 in winter and UTC-4 in DST.
+        int ny_utc_offset = IsUSDST(base_time) ? -4 : -5;
+        utc_minutes = (9 * 60 + 30) - ny_utc_offset * 60;
+    }
+    else
+    {
+        // London open = 08:00 London time.
+        // London is UTC+0 in winter and UTC+1 in DST.
+        int london_utc_offset = IsUKDST(base_time) ? 1 : 0;
+        utc_minutes = (8 * 60) - london_utc_offset * 60;
+    }
+
+    int server_minutes = utc_minutes + broker_offset * 60;
+
+    return MidnightForDate(base_time) + server_minutes * 60;
+}
+
+//+------------------------------------------------------------------+
+double GetSessionOpenPrice(bool is_new_york)
+{
+    datetime now_time = TimeCurrent();
+    datetime session_time = GetSessionOpenServerTime(now_time, is_new_york);
+
+    // If current broker/server time is before today's session open,
+    // use the previous day's session open.
+    if(now_time < session_time)
+    {
+        datetime previous_day = now_time - 86400;
+        session_time = GetSessionOpenServerTime(previous_day, is_new_york);
+    }
+
+    int shift = iBarShift(_Symbol, _Period, session_time, false);
+    if(shift < 0)
+        return 0.0;
+
+    return iOpen(_Symbol, _Period, shift);
+}
+
+//+------------------------------------------------------------------+
+void DrawMoveLabel(string object_name, string label_text, double anchor_price, int x, int y)
+{
+    if(anchor_price <= 0.0)
+    {
+        DrawLabel(object_name, label_text + ": • 0.00 pts", x, y, ColorMoveFlat, TableFontSize);
+        return;
+    }
+
+    double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double diff = live_price - anchor_price;
+
+    string arrow = "•";
+    color clr = ColorMoveFlat;
+
+    if(diff > 0.0)
+    {
+        arrow = "▲";
+        clr = ColorMoveUp;
+    }
+    else if(diff < 0.0)
+    {
+        arrow = "▼";
+        clr = ColorMoveDown;
+    }
+
+    DrawLabel(
+        object_name,
+        StringFormat("%s: %s %.2f pts", label_text, arrow, MathAbs(diff)),
+        x,
+        y,
+        clr,
+        TableFontSize
+    );
+}
+  
+//+------------------------------------------------------------------+
 void DrawFromStartLabel()
   {
+   ObjectDelete(0, "VWAP_FROM_START");
+
    int x = TableXOffset;
    int y = TableYOffset + (TableRowGap + 6) + (TableRowGap + 4) + 7 * TableRowGap + 8;
-
-   double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
-   if(g_start_price <= 0.0 && live_price > 0.0)
-      g_start_price = live_price;
-
-   double diff = live_price - g_start_price;
-
-   string arrow = "•";
-   color clr = ColorMoveFlat;
-
-   if(diff > 0.0)
-     {
-      arrow = "▲";
-      clr = ColorMoveUp;
-     }
-   else if(diff < 0.0)
-     {
-      arrow = "▼";
-      clr = ColorMoveDown;
-     }
-
-   DrawLabel("VWAP_FROM_START",
-             StringFormat("From start: %s %.2f pts", arrow, MathAbs(diff)),
-             x, y, clr, TableFontSize);
-
-   y += TableRowGap;
 
    string sigma_arrow = "•";
    color sigma_clr = ColorMoveFlat;
@@ -323,6 +522,16 @@ void DrawFromStartLabel()
    DrawLabel("VWAP_SIGMA5_SHIFT",
              StringFormat("Σ5 VWAP:   %s %.2f pts", sigma_arrow, MathAbs(g_reference_shift_5)),
              x, y, sigma_clr, TableFontSize);
+
+   y += TableRowGap;
+
+   double london_open_price = GetSessionOpenPrice(false);
+   DrawMoveLabel("VWAP_LDN_OPEN", "LDN open", london_open_price, x, y);
+
+   y += TableRowGap;
+
+   double ny_open_price = GetSessionOpenPrice(true);
+   DrawMoveLabel("VWAP_NY_OPEN", "NY open", ny_open_price, x, y);
   }
     
 
