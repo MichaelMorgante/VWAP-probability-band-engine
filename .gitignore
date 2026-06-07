@@ -11,3 +11,5 @@ htmlcov/
 
 # Generated replay outputs
 artifacts/tables/replay_output.parquet
+
+*.ex5
