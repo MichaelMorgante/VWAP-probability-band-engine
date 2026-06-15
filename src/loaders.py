@@ -112,6 +112,88 @@ def load_mt5_live(symbol: str, timeframe_mt5, n_bars: int = 500) -> pd.DataFrame
     print(f"✅ MT5 Live loaded: {len(df):,} bars for {symbol}")
     return _normalise(df)
 
+def load_mt5_range(
+    symbol: str,
+    timeframe_mt5,
+    start_time_utc: datetime,
+    end_time_utc: datetime,
+) -> pd.DataFrame:
+    """
+    Pull bars from MT5 between two UTC datetimes.
+
+    This is used for session rebuilds, for example:
+    - London open to now
+    - New York open to now
+    - Manual UK-selected start time converted to UTC
+
+    Important:
+    - This function does not initialise or shut down MT5.
+    - MT5 should already be initialised by the live runner/notebook.
+    - start_time_utc and end_time_utc should be timezone-aware UTC datetimes.
+    - Returns the same normalised schema as load_mt5_live().
+    """
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        raise ImportError(
+            "MetaTrader5 package not installed.\n"
+            "Run: pip install MetaTrader5"
+        )
+
+    if start_time_utc.tzinfo is None:
+        start_time_utc = start_time_utc.replace(tzinfo=timezone.utc)
+    else:
+        start_time_utc = start_time_utc.astimezone(timezone.utc)
+
+    if end_time_utc.tzinfo is None:
+        end_time_utc = end_time_utc.replace(tzinfo=timezone.utc)
+    else:
+        end_time_utc = end_time_utc.astimezone(timezone.utc)
+
+    if start_time_utc >= end_time_utc:
+        raise ValueError(
+            f"start_time_utc must be before end_time_utc. "
+            f"Got {start_time_utc} >= {end_time_utc}"
+        )
+
+    rates = mt5.copy_rates_range(
+        symbol,
+        timeframe_mt5,
+        start_time_utc,
+        end_time_utc,
+    )
+
+    if rates is None or len(rates) == 0:
+        raise RuntimeError(
+            f"MT5 returned no data for {symbol} between "
+            f"{start_time_utc} and {end_time_utc}.\n"
+            "Check MT5 connection, symbol name, market hours, and broker history."
+        )
+
+    df = pd.DataFrame(rates)
+
+    df = df.rename(
+        columns={
+            "time": "datetime",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "tick_volume": "tick_volume",
+            "real_volume": "real_volume",
+        }
+    )
+
+    df["datetime"] = pd.to_datetime(df["datetime"], unit="s", utc=True)
+
+    print(
+        f"✅ MT5 range loaded: {len(df):,} bars for {symbol} "
+        f"from {start_time_utc:%Y-%m-%d %H:%M UTC} "
+        f"to {end_time_utc:%Y-%m-%d %H:%M UTC}"
+    )
+
+    return _normalise(df)
+
 def fetch_mt5_history(symbol: str,
                       timeframe_mt5,
                       lookback_days: int = 30,
