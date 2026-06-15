@@ -313,7 +313,7 @@ void DrawBandLine(string name, double price, color clr, int width, int style)
     ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
     ObjectSetInteger(0, name, OBJPROP_STYLE, style);
     ObjectSetInteger(0, name, OBJPROP_BACK, true);
-    ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+    ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, true);
     ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
     ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
     ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
