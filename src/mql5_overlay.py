@@ -23,6 +23,7 @@ input string JsonPath = "live_state.json";
 
 // Display toggles
 input bool ShowBands   = true;
+input bool AnchorBandsToStartup = true;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
 input bool ShowBandTable = true;
@@ -68,6 +69,11 @@ double g_reference_shift_5 = 0;
 string g_zone = "", g_signal_type = "NO_SIGNAL", g_trend = "";
 string g_trend_display = "FLAT", g_bias_display = "NEUTRAL";
 string g_setup_type = "NEUTRAL", g_signal_display = "WAIT", g_suppressed_by = "";
+string g_startup_mode = "";
+string g_startup_label = "";
+string g_startup_start_uk = "";
+string g_startup_start_server = "";
+string g_startup_anchor_active = "NO";
 double g_p_mr = 0, g_edge_gap = 0;
 double g_band1p = 0, g_band1n = 0;
 double g_band2p = 0, g_band2n = 0;
@@ -147,6 +153,11 @@ void ReadJsonState()
    string new_setup_type     = ExtractString(content, "setup_type");
    string new_signal_display = ExtractString(content, "signal_display");
    string new_suppressed_by  = ExtractString(content, "suppressed_by");
+   string new_startup_mode = ExtractString(content, "startup_mode");
+   string new_startup_label = ExtractString(content, "startup_label");
+   string new_startup_start_uk = ExtractString(content, "startup_start_uk");
+   string new_startup_start_server = ExtractString(content, "startup_start_server");
+   string new_startup_anchor_active = ExtractString(content, "startup_anchor_active");
 
    // only shift current -> previous if values actually changed
    bool changed =
@@ -206,6 +217,12 @@ void ReadJsonState()
       g_bias_display   = new_bias_display;
       g_suppressed_by  = new_suppressed_by;
      }
+
+     g_startup_mode = new_startup_mode;
+     g_startup_label = new_startup_label;
+     g_startup_start_uk = new_startup_start_uk;
+     g_startup_start_server = new_startup_start_server;
+     g_startup_anchor_active = new_startup_anchor_active;
   }
 
 //+------------------------------------------------------------------+
@@ -234,14 +251,73 @@ string ExtractString(string json, string key)
 //+------------------------------------------------------------------+
 void DrawHLine(string name, double price, color clr, int width, int style)
   {
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
-   ObjectSetDouble(0, name, OBJPROP_PRICE, price);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
-   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+    if(ObjectFind(0, name) >= 0 && ObjectGetInteger(0, name, OBJPROP_TYPE) != OBJ_HLINE)
+        ObjectDelete(0, name);
+
+    if(ObjectFind(0, name) < 0)
+        ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+
+    ObjectSetDouble(0, name, OBJPROP_PRICE, price);
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+    ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+    ObjectSetInteger(0, name, OBJPROP_BACK, true);
   }
+
+//+------------------------------------------------------------------+
+datetime GetStartupAnchorTime()
+{
+    if(!AnchorBandsToStartup)
+        return 0;
+
+    if(g_startup_anchor_active != "YES")
+        return 0;
+
+    if(StringLen(g_startup_start_server) < 10)
+        return 0;
+
+    datetime anchor_time = StringToTime(g_startup_start_server);
+
+    if(anchor_time <= 0)
+        return 0;
+
+    if(anchor_time >= TimeCurrent())
+        return 0;
+
+    return anchor_time;
+}
+
+//+------------------------------------------------------------------+
+void DrawBandLine(string name, double price, color clr, int width, int style)
+{
+    datetime anchor_time = GetStartupAnchorTime();
+
+    if(anchor_time <= 0)
+    {
+        DrawHLine(name, price, clr, width, style);
+        return;
+    }
+
+    datetime end_time = TimeCurrent();
+
+    if(ObjectFind(0, name) >= 0 && ObjectGetInteger(0, name, OBJPROP_TYPE) != OBJ_TREND)
+        ObjectDelete(0, name);
+
+    if(ObjectFind(0, name) < 0)
+        ObjectCreate(0, name, OBJ_TREND, 0, anchor_time, price, end_time, price);
+
+    ObjectMove(0, name, 0, anchor_time, price);
+    ObjectMove(0, name, 1, end_time, price);
+
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+    ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+    ObjectSetInteger(0, name, OBJPROP_BACK, true);
+    ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+    ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
+    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
 
 //+------------------------------------------------------------------+
 void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
@@ -642,16 +718,15 @@ void DrawBandTable()
 //+------------------------------------------------------------------+
 void DrawOverlay()
   {
-   if(ShowBands && g_reference > 0)
-     {
-      DrawHLine("VWAP_REF",   g_reference, ColorVWAP,  2, STYLE_SOLID);
-      DrawHLine("VWAP_1P",    g_band1p,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_1N",    g_band1n,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_2P",    g_band2p,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_2N",    g_band2n,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_3P",    g_band3p,    ColorBand3, 1, STYLE_DASHDOT);
-      DrawHLine("VWAP_3N",    g_band3n,    ColorBand3, 1, STYLE_DASHDOT);
-     }
+   if(ShowBands && g_reference > 0) {
+       DrawBandLine("VWAP_REF", g_reference, ColorVWAP, 2, STYLE_SOLID);
+       DrawBandLine("VWAP_1P", g_band1p, ColorBand1, 1, STYLE_DOT);
+       DrawBandLine("VWAP_1N", g_band1n, ColorBand1, 1, STYLE_DOT);
+       DrawBandLine("VWAP_2P", g_band2p, ColorBand2, 1, STYLE_DASH);
+       DrawBandLine("VWAP_2N", g_band2n, ColorBand2, 1, STYLE_DASH);
+       DrawBandLine("VWAP_3P", g_band3p, ColorBand3, 1, STYLE_DASHDOT);
+       DrawBandLine("VWAP_3N", g_band3n, ColorBand3, 1, STYLE_DASHDOT);
+  }
 
    DrawCandleCountdownLabel();
 
