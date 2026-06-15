@@ -125,7 +125,9 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
              generate_signal=None,
              regime_gate=None,
              apply_filters=None,
-             on_state_update=None) -> None:
+             on_state_update=None,
+             initial_df: pd.DataFrame | None = None,
+             session_info: dict | None = None,) -> None:
     """
     Live mode runner with:
     - Session warmup guard (no signals for first N bars after VWAP reset)
@@ -162,12 +164,38 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
     output_path = mt5_files_dir / "live_state.json"
 
     # ── Warm up engine ──
-    warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
+    if initial_df is not None:
+        warmup_df = initial_df.copy()
+        print(f"✅ Using preloaded startup dataframe: {len(warmup_df):,} bars")
+
+        if session_info is not None:
+            print(
+                "✅ Startup session: "
+                f"{session_info.get('label', 'unknown')} "
+                f"| mode={session_info.get('mode', 'unknown')}"
+            )
+    else:
+        warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
+        print(f"✅ Using normal MT5 live warmup: {len(warmup_df):,} bars")
+
+    if warmup_df is None or len(warmup_df) == 0:
+        raise RuntimeError("Warmup dataframe is empty. Cannot start live engine.")
+
+    if "datetime" in warmup_df.columns:
+        warmup_df = warmup_df.sort_values("datetime").reset_index(drop=True)
+
     state = EngineState()
+
     for _, row in warmup_df.iterrows():
-        state = update_engine_state(state, row.to_dict(), config,
-                                    prob_table, marginal_table)
-    print(f"✅ Live engine warmed up on {len(warmup_df)} bars")
+        state = update_engine_state(
+            state,
+            row.to_dict(),
+            config,
+            prob_table,
+            marginal_table,
+        )
+
+    print(f"✅ Live engine warmed up on {len(warmup_df):,} bars")
 
     last_bar_time = None
     signal_state = 'NO_SIGNAL'   # state machine
