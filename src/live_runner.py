@@ -319,6 +319,38 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 'band_3p':       round(state.bands.get('3+', 0), 5),
                 'band_3n':       round(state.bands.get('3-', 0), 5),
             }
+            if session_info is not None:
+                start_uk = session_info.get("start_uk")
+                start_broker = session_info.get("start_broker")
+                rebuild_used = bool(session_info.get("startup_rebuild_used", False))
+
+                live_state_dict.update(
+                    {
+                        "startup_mode": str(session_info.get("mode", "")),
+                        "startup_label": str(session_info.get("label", "")),
+                        "startup_start_uk": (
+                            start_uk.strftime("%H:%M") if start_uk is not None else ""
+                        ),
+                        "startup_start_server": (
+                            start_broker.strftime("%Y.%m.%d %H:%M")
+                            if start_broker is not None
+                            else ""
+                        ),
+                        "startup_anchor_active": (
+                            "YES" if rebuild_used and start_broker is not None else "NO"
+                        ),
+                    }
+                )
+            else:
+                live_state_dict.update(
+                    {
+                        "startup_mode": "",
+                        "startup_label": "",
+                        "startup_start_uk": "",
+                        "startup_start_server": "",
+                        "startup_anchor_active": "NO",
+                    }
+                )
             with open(output_path, 'w') as f:
                 json.dump(live_state_dict, f, indent=2)
 

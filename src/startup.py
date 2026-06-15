@@ -53,6 +53,8 @@ def prepare_live_startup(
     print("\n" + format_session_summary(session_info))
 
     if session_start_mode == "now":
+        session_info["startup_rebuild_used"] = False
+
         print("\n✅ SESSION_START_MODE='now' selected.")
         print("✅ Using normal recent MT5 warmup, same as before.")
         return None, session_info
@@ -72,10 +74,14 @@ def prepare_live_startup(
             end_time_utc=session_info["end_utc"],
         )
 
+        session_info["startup_rebuild_used"] = True
+
         print(f"✅ Loaded {len(initial_df):,} candles from selected startup anchor")
         return initial_df, session_info
 
     except Exception as exc:
+        session_info["startup_rebuild_used"] = False
+
         print("\n⚠️ Session rebuild failed. Falling back to normal live startup.")
         print(f"Reason: {exc}")
         return None, session_info
