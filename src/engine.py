@@ -5,6 +5,7 @@ import pandas as pd
 
 from src.lookup import lookup_probabilities
 from src.zones import classify_zone
+from src.adaptive_trend_health import update_adaptive_trend_health
 
 
 @dataclass
@@ -23,6 +24,7 @@ class EngineState:
     zone:              str    = 'Z0'
     context:           dict   = field(default_factory=dict)
     probabilities:     dict   = field(default_factory=dict)
+    adaptive_trend_health: dict = field(default_factory=dict)
     reference_type:    str    = 'VWAP'
     bar_index:         int    = 0
 
@@ -37,6 +39,7 @@ class EngineState:
     _session_date:     object = None
     _z_history:        list   = field(default_factory=list)
     _ref_history:      list   = field(default_factory=list)
+    _ath_history:      list = field(default_factory=list)
     _vol_ema:          float  = 0.0
 
 
@@ -163,8 +166,23 @@ def update_engine_state(state: EngineState, bar: dict,
     state.close          = close
     state.reference      = reference
     state.sigma          = sigma
-    state.bands          = {f'{k}+': reference + k * sigma for k in [1, 2, 3]}
-    state.bands.update(  {f'{k}-': reference - k * sigma for k in [1, 2, 3]})
+    state.bands = {f'{k}+': reference + k * sigma for k in [1, 2, 3]}
+    state.bands.update(
+        {f'{k}-': reference - k * sigma for k in [1, 2, 3]}
+    )
+
+    state._ath_history, state.adaptive_trend_health = update_adaptive_trend_health(
+        history=state._ath_history,
+        bar=bar,
+        reference=reference,
+        bands=state.bands,
+        config=config,
+    )
+
+    context["adaptive_trend_health"] = state.adaptive_trend_health.get(
+        "trend_health",
+        "NO_TREND",
+    )
     state.z_score        = z_score
     state.z_velocity     = z_velocity
     state.zone           = zone

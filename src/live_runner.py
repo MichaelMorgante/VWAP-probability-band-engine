@@ -288,6 +288,8 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
             if signal_display == 'NO_SIGNAL':
                 signal_display = 'WAIT'
 
+            ath = getattr(state, "adaptive_trend_health", {}) or {}
+
             live_state_dict = {
                 'datetime':      str(state.datetime),
                 'symbol':        symbol,
@@ -309,9 +311,22 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 'p_mr':          round(probs.get('MR', {}).get('prob', 0), 4) if isinstance(probs.get('MR'), dict) else 0,
                 'p_cont':        round(probs.get('CONT', {}).get('prob', 0), 4) if isinstance(probs.get('CONT'), dict) else 0,
                 'edge_gap':      round(probs.get('edge_gap', 0), 4),
-                'signal_type':   sig.signal_type,
-                'signal_state':  signal_state,
-                'session_bar':   state.session_bar_count,
+                'signal_type': sig.signal_type,
+                'signal_state': signal_state,
+                'session_bar': state.session_bar_count,
+
+                'adaptive_trend_direction': ath.get('trend_direction', 'NONE'),
+                'adaptive_trend_state': ath.get('trend_state', 'NO_TREND'),
+                'adaptive_lane_count': int(ath.get('lane_count', 0)),
+                'adaptive_red_shift': round(float(ath.get('avg_trend_shift', 0.0)), 2),
+                'adaptive_current_red_shift': round(float(ath.get('current_shift', 0.0)), 2),
+                'adaptive_shift_ratio': round(float(ath.get('shift_ratio', 0.0)), 4),
+                'adaptive_shift_class': ath.get('shift_class', 'WEAK_SHIFT'),
+                'adaptive_spread_state': ath.get('spread_state', 'NOT_EXPANDING'),
+                'adaptive_orange_pressure': ath.get('orange_pressure', 'NO_ORANGE_PRESSURE'),
+                'adaptive_compression': ath.get('compression_state', 'NONE'),
+                'adaptive_trend_health': ath.get('trend_health', 'NO_TREND'),
+                
                 'band_1p':       round(state.bands.get('1+', 0), 5),
                 'band_1n':       round(state.bands.get('1-', 0), 5),
                 'band_2p':       round(state.bands.get('2+', 0), 5),
