@@ -167,7 +167,7 @@ The current default thresholds are:
 | Extended trend | 16 qualifying candles |
 | Trend break tolerance | 5 bad candles |
 | Red shift baseline window | 7 candles |
-| Current red shift window | 3 candles |
+| Current red shift window | 1 candle |
 | Orange pressure window | 10 candles |
 | Compression tolerance | 0.25 |
 | Lane shift tolerance | 0.25 |
@@ -198,14 +198,17 @@ The MT5 overlay displays this as a separate left-panel block below the current s
 ```text
 Adaptive Trend Health
 ---------------------
-State: CONFIRMED_DOWN_TREND | Count: 9
-Red shift: 12.40 | Current: 10.80 | Ratio: 87%
-Shift: VERY_STRONG_SHIFT
+State: CONFIRMED_DOWN_TREND | Lane: 9
+Avg red: 12.40 | Last red: 10.80 | Ratio: 87%
+Avg class: VERY_STRONG_SHIFT
 Spread: EXPANDING
 Orange: STRONG_ORANGE_PRESSURE
 Compression: NONE
 Health: VERY_STRONG_DOWN_TREND
 ```
+`Avg red` is the median directional red-band shift over recent qualifying trend-lane candles.  
+`Last red` is the most recent closed candle’s directional red-band shift.  
+`Ratio` is `Last red / Avg red`.
 
 ## Notebook Workflow
 

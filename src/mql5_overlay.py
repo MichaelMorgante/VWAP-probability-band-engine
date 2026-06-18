@@ -819,20 +819,20 @@ void DrawOverlay()
       label = label + "\n---------------------";
 
       label = label + StringFormat(
-          "\nState: %s | Count: %.0f",
+          "\nState: %s | Lane: %.0f",
           g_adaptive_trend_state,
           g_adaptive_lane_count
       );
 
       label = label + StringFormat(
-          "\nRed shift: %.2f | Current: %.2f | Ratio: %.0f%%",
+          "\nAvg red: %.2f | Last red: %.2f | Ratio: %.0f%%",
           g_adaptive_red_shift,
           g_adaptive_current_red_shift,
           g_adaptive_shift_ratio * 100.0
       );
 
       label = label + StringFormat(
-          "\nShift: %s",
+          "\nAvg class: %s",
           g_adaptive_shift_class
       );
 

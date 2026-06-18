@@ -57,7 +57,10 @@ CONFIG = {
 
     # Shift windows.
     'adaptive_shift_baseline_window': 7,
-    'adaptive_shift_current_window': 3,
+    
+    # Last closed directional red-band shift.
+    # Set to 1 so "Last red" means the most recent closed candle.
+    'adaptive_shift_current_window': 1,
 
     # Directional red-band shift thresholds, in US100/Nasdaq points.
     # These measure the red band moving in the trend direction.
