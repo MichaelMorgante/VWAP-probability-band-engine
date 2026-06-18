@@ -819,7 +819,7 @@ void DrawOverlay()
       label = label + "\n---------------------";
 
       label = label + StringFormat(
-          "\nState: %s | Lane: %.0f",
+          "\nState: %s | Trend hold: %.0f",
           g_adaptive_trend_state,
           g_adaptive_lane_count
       );
