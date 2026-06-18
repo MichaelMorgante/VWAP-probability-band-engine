@@ -71,8 +71,11 @@ string g_trend_display = "FLAT", g_bias_display = "NEUTRAL";
 string g_setup_type = "NEUTRAL", g_signal_display = "WAIT", g_suppressed_by = "";
 string g_startup_mode = "";
 string g_startup_label = "";
+string g_startup_overlay_visual_start = "";
 string g_startup_start_uk = "";
 string g_startup_start_server = "";
+string g_startup_line_start_uk = "";
+string g_startup_line_start_server = "";
 string g_startup_anchor_active = "NO";
 double g_p_mr = 0, g_edge_gap = 0;
 double g_band1p = 0, g_band1n = 0;
@@ -155,8 +158,11 @@ void ReadJsonState()
    string new_suppressed_by  = ExtractString(content, "suppressed_by");
    string new_startup_mode = ExtractString(content, "startup_mode");
    string new_startup_label = ExtractString(content, "startup_label");
+   string new_startup_overlay_visual_start = ExtractString(content, "startup_overlay_visual_start");
    string new_startup_start_uk = ExtractString(content, "startup_start_uk");
    string new_startup_start_server = ExtractString(content, "startup_start_server");
+   string new_startup_line_start_uk = ExtractString(content, "startup_line_start_uk");
+   string new_startup_line_start_server = ExtractString(content, "startup_line_start_server");
    string new_startup_anchor_active = ExtractString(content, "startup_anchor_active");
 
    // only shift current -> previous if values actually changed
@@ -220,8 +226,11 @@ void ReadJsonState()
 
      g_startup_mode = new_startup_mode;
      g_startup_label = new_startup_label;
+     g_startup_overlay_visual_start = new_startup_overlay_visual_start;
      g_startup_start_uk = new_startup_start_uk;
      g_startup_start_server = new_startup_start_server;
+     g_startup_line_start_uk = new_startup_line_start_uk;
+     g_startup_line_start_server = new_startup_line_start_server;
      g_startup_anchor_active = new_startup_anchor_active;
   }
 
@@ -273,10 +282,17 @@ datetime GetStartupAnchorTime()
     if(g_startup_anchor_active != "YES")
         return 0;
 
-    if(StringLen(g_startup_start_server) < 10)
+    string anchor_text = g_startup_line_start_server;
+
+    // Backward compatibility: if the new line-start field is missing,
+    // fall back to the original selected session start.
+    if(StringLen(anchor_text) < 10)
+        anchor_text = g_startup_start_server;
+
+    if(StringLen(anchor_text) < 10)
         return 0;
 
-    datetime anchor_time = StringToTime(g_startup_start_server);
+    datetime anchor_time = StringToTime(anchor_text);
 
     if(anchor_time <= 0)
         return 0;

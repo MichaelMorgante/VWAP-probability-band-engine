@@ -18,6 +18,7 @@ def prepare_live_startup(
     manual_start_uk: str = "16:00",
     broker_timezone_name: str | None = None,
     replay_warmup_bars: int = 200,
+    overlay_visual_start: str = "session",
 ) -> tuple[pd.DataFrame | None, dict]:
     """
     Prepare optional startup data for the live engine.
@@ -74,6 +75,10 @@ def prepare_live_startup(
         session_info["replay_warmup_bars"] = 0
         session_info["data_start_utc"] = None
         session_info["data_start_uk"] = None
+        session_info["overlay_visual_start"] = "none"
+        session_info["overlay_line_start_utc"] = None
+        session_info["overlay_line_start_uk"] = None
+        session_info["overlay_line_start_broker"] = None
 
         print("\n✅ SESSION_START_MODE='now' selected.")
         print("✅ Using normal recent MT5 warmup, same as before.")
@@ -99,9 +104,40 @@ def prepare_live_startup(
             session_info["start_uk"].tzinfo
         )
 
+        overlay_visual_start = overlay_visual_start.lower().strip()
+
+        if overlay_visual_start not in {"session", "warmup"}:
+            raise ValueError(
+                "overlay_visual_start must be either 'session' or 'warmup'."
+            )
+
+        if overlay_visual_start == "warmup":
+            overlay_line_start_utc = data_start_utc
+        else:
+            overlay_line_start_utc = session_info["start_utc"]
+
+        session_info["overlay_visual_start"] = overlay_visual_start
+        session_info["overlay_line_start_utc"] = overlay_line_start_utc
+        session_info["overlay_line_start_uk"] = overlay_line_start_utc.astimezone(
+            session_info["start_uk"].tzinfo
+        )
+
+        start_broker = session_info.get("start_broker")
+        if start_broker is not None:
+            session_info["overlay_line_start_broker"] = overlay_line_start_utc.astimezone(
+                start_broker.tzinfo
+            )
+        else:
+            session_info["overlay_line_start_broker"] = None
+
         print("\n✅ Loading session rebuild candles from MT5...")
-        print(f"✅ Overlay/session anchor UK: {session_info['start_uk']:%H:%M}")
+        print(f"✅ Selected launch anchor UK: {session_info['start_uk']:%H:%M}")
         print(f"✅ Data warmup start UK:      {session_info['data_start_uk']:%H:%M}")
+        print(
+            f"✅ Overlay line start UK:     "
+            f"{session_info['overlay_line_start_uk']:%H:%M} "
+            f"({overlay_visual_start})"
+        )
         print(f"✅ Replay warmup bars:       {replay_warmup_bars}")
 
         initial_df = load_mt5_range(

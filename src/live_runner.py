@@ -322,12 +322,17 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
             if session_info is not None:
                 start_uk = session_info.get("start_uk")
                 start_broker = session_info.get("start_broker")
+                line_start_uk = session_info.get("overlay_line_start_uk")
+                line_start_broker = session_info.get("overlay_line_start_broker")
                 rebuild_used = bool(session_info.get("startup_rebuild_used", False))
 
                 live_state_dict.update(
                     {
                         "startup_mode": str(session_info.get("mode", "")),
                         "startup_label": str(session_info.get("label", "")),
+                        "startup_overlay_visual_start": str(
+                            session_info.get("overlay_visual_start", "")
+                        ),
                         "startup_start_uk": (
                             start_uk.strftime("%H:%M") if start_uk is not None else ""
                         ),
@@ -336,8 +341,16 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                             if start_broker is not None
                             else ""
                         ),
+                        "startup_line_start_uk": (
+                            line_start_uk.strftime("%H:%M") if line_start_uk is not None else ""
+                        ),
+                        "startup_line_start_server": (
+                            line_start_broker.strftime("%Y.%m.%d %H:%M")
+                            if line_start_broker is not None
+                            else ""
+                        ),
                         "startup_anchor_active": (
-                            "YES" if rebuild_used and start_broker is not None else "NO"
+                            "YES" if rebuild_used and line_start_broker is not None else "NO"
                         ),
                     }
                 )
@@ -346,8 +359,11 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                     {
                         "startup_mode": "",
                         "startup_label": "",
+                        "startup_overlay_visual_start": "",
                         "startup_start_uk": "",
                         "startup_start_server": "",
+                        "startup_line_start_uk": "",
+                        "startup_line_start_server": "",
                         "startup_anchor_active": "NO",
                     }
                 )
