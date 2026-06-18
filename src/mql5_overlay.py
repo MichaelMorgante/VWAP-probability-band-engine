@@ -69,6 +69,18 @@ double g_reference_shift_5 = 0;
 string g_zone = "", g_signal_type = "NO_SIGNAL", g_trend = "";
 string g_trend_display = "FLAT", g_bias_display = "NEUTRAL";
 string g_setup_type = "NEUTRAL", g_signal_display = "WAIT", g_suppressed_by = "";
+string g_adaptive_trend_direction = "NONE";
+string g_adaptive_trend_state = "NO_TREND";
+string g_adaptive_shift_class = "WEAK_SHIFT";
+string g_adaptive_spread_state = "NOT_EXPANDING";
+string g_adaptive_orange_pressure = "NO_ORANGE_PRESSURE";
+string g_adaptive_compression = "NONE";
+string g_adaptive_trend_health = "NO_TREND";
+
+double g_adaptive_lane_count = 0.0;
+double g_adaptive_red_shift = 0.0;
+double g_adaptive_current_red_shift = 0.0;
+double g_adaptive_shift_ratio = 0.0;
 string g_startup_mode = "";
 string g_startup_label = "";
 string g_startup_overlay_visual_start = "";
@@ -156,6 +168,18 @@ void ReadJsonState()
    string new_setup_type     = ExtractString(content, "setup_type");
    string new_signal_display = ExtractString(content, "signal_display");
    string new_suppressed_by  = ExtractString(content, "suppressed_by");
+   string new_adaptive_trend_direction = ExtractString(content, "adaptive_trend_direction");
+   string new_adaptive_trend_state = ExtractString(content, "adaptive_trend_state");
+   string new_adaptive_shift_class = ExtractString(content, "adaptive_shift_class");
+   string new_adaptive_spread_state = ExtractString(content, "adaptive_spread_state");
+   string new_adaptive_orange_pressure = ExtractString(content, "adaptive_orange_pressure");
+   string new_adaptive_compression = ExtractString(content, "adaptive_compression");
+   string new_adaptive_trend_health = ExtractString(content, "adaptive_trend_health");
+
+   double new_adaptive_lane_count = ExtractDouble(content, "adaptive_lane_count");
+   double new_adaptive_red_shift = ExtractDouble(content, "adaptive_red_shift");
+   double new_adaptive_current_red_shift = ExtractDouble(content, "adaptive_current_red_shift");
+   double new_adaptive_shift_ratio = ExtractDouble(content, "adaptive_shift_ratio");
    string new_startup_mode = ExtractString(content, "startup_mode");
    string new_startup_label = ExtractString(content, "startup_label");
    string new_startup_overlay_visual_start = ExtractString(content, "startup_overlay_visual_start");
@@ -205,6 +229,19 @@ void ReadJsonState()
       g_signal_display = new_signal_display;
       g_bias_display   = new_bias_display;
       g_suppressed_by  = new_suppressed_by;
+
+      g_adaptive_trend_direction = new_adaptive_trend_direction;
+      g_adaptive_trend_state = new_adaptive_trend_state;
+      g_adaptive_shift_class = new_adaptive_shift_class;
+      g_adaptive_spread_state = new_adaptive_spread_state;
+      g_adaptive_orange_pressure = new_adaptive_orange_pressure;
+      g_adaptive_compression = new_adaptive_compression;
+      g_adaptive_trend_health = new_adaptive_trend_health;
+
+      g_adaptive_lane_count = new_adaptive_lane_count;
+      g_adaptive_red_shift = new_adaptive_red_shift;
+      g_adaptive_current_red_shift = new_adaptive_current_red_shift;
+      g_adaptive_shift_ratio = new_adaptive_shift_ratio;
      }
    else
      {
@@ -222,6 +259,19 @@ void ReadJsonState()
       g_signal_display = new_signal_display;
       g_bias_display   = new_bias_display;
       g_suppressed_by  = new_suppressed_by;
+
+      g_adaptive_trend_direction = new_adaptive_trend_direction;
+      g_adaptive_trend_state = new_adaptive_trend_state;
+      g_adaptive_shift_class = new_adaptive_shift_class;
+      g_adaptive_spread_state = new_adaptive_spread_state;
+      g_adaptive_orange_pressure = new_adaptive_orange_pressure;
+      g_adaptive_compression = new_adaptive_compression;
+      g_adaptive_trend_health = new_adaptive_trend_health;
+
+      g_adaptive_lane_count = new_adaptive_lane_count;
+      g_adaptive_red_shift = new_adaptive_red_shift;
+      g_adaptive_current_red_shift = new_adaptive_current_red_shift;
+      g_adaptive_shift_ratio = new_adaptive_shift_ratio;
      }
 
      g_startup_mode = new_startup_mode;
@@ -764,6 +814,47 @@ void DrawOverlay()
 
       if(g_signal_display == "WAIT" && StringLen(g_suppressed_by) > 0)
          label = label + "\nReason: " + g_suppressed_by;
+
+      label = label + "\n\nAdaptive Trend Health";
+
+      label = label + StringFormat(
+          "\nState: %s | Count: %.0f",
+          g_adaptive_trend_state,
+          g_adaptive_lane_count
+      );
+
+      label = label + StringFormat(
+          "\nRed shift: %.2f | Current: %.2f | Ratio: %.0f%%",
+          g_adaptive_red_shift,
+          g_adaptive_current_red_shift,
+          g_adaptive_shift_ratio * 100.0
+      );
+
+      label = label + StringFormat(
+          "\nShift: %s",
+          g_adaptive_shift_class
+      );
+
+      label = label + StringFormat(
+          "\nSpread: %s",
+          g_adaptive_spread_state
+      );
+
+      label = label + StringFormat(
+          "\nOrange: %s",
+          g_adaptive_orange_pressure
+      );
+
+      label = label + StringFormat(
+          "\nCompression: %s",
+          g_adaptive_compression
+      );
+
+      label = label + StringFormat(
+          "\nHealth: %s",
+          g_adaptive_trend_health
+      );
+
 
       Comment(label);
      }
