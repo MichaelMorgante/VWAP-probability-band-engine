@@ -142,6 +142,70 @@ and filters them using:
 - regime compatibility,
 - time-of-day filters.
 
+### 7. Adaptive Trend Health
+
+The live MT5 overlay also includes an Adaptive Trend Health layer. This is a discretionary context module rather than an automated entry trigger. Its purpose is to describe whether the current market is trending cleanly, whether the trend is expanding, and whether continuation conditions are strengthening or weakening.
+
+The trend-health logic separates three ideas:
+
+1. **Trend existence** — determined by price holding the correct side of VWAP while the relevant green/orange bands continue to shift in the trend direction.
+2. **Trend strength** — determined by the red band shifting in the direction of the trend.
+3. **Spread/expansion quality** — determined by the opposite red band moving away while total band width expands.
+
+For bullish conditions, the engine monitors whether price is above VWAP, VWAP is rising, upper green/orange are not meaningfully shifting down, and the upper red band is shifting upward.  
+For bearish conditions, it monitors whether price is below VWAP, VWAP is falling, lower green/orange are not meaningfully shifting up, and the lower red band is shifting downward.
+
+Orange-band touches are treated as impulse or extension pressure, not as automatic trend-ending signals.
+
+The current default thresholds are:
+
+| Component | Value |
+|---|---:|
+| Building trend | 3 qualifying candles |
+| Confirmed trend | 7 qualifying candles |
+| Established trend | 11 qualifying candles |
+| Extended trend | 16 qualifying candles |
+| Trend break tolerance | 5 bad candles |
+| Red shift baseline window | 7 candles |
+| Current red shift window | 3 candles |
+| Orange pressure window | 10 candles |
+| Compression tolerance | 0.25 |
+| Lane shift tolerance | 0.25 |
+
+Directional red-band shift strength is classified as:
+
+| Red-band shift | Label |
+|---:|---|
+| 40+ | `EXTREME_EVENT_SHIFT` |
+| 20+ | `VERY_HIGH_VOL_SHIFT` |
+| 12+ | `VERY_STRONG_SHIFT` |
+| 8+ | `STRONG_SHIFT` |
+| 5+ | `GOOD_SHIFT` |
+| 3+ | `MINIMUM_SHIFT` |
+| < 3 | `WEAK_SHIFT` |
+
+Expansion is classified as:
+
+| Spread count over current window | Label |
+|---:|---|
+| 3 | `STRONG_EXPANSION` |
+| 2 | `EXPANDING` |
+| 1 | `MIXED_EXPANSION` |
+| 0 | `NOT_EXPANDING` |
+
+The MT5 overlay displays this as a separate left-panel block below the current signal table:
+
+```text
+Adaptive Trend Health
+---------------------
+State: CONFIRMED_DOWN_TREND | Count: 9
+Red shift: 12.40 | Current: 10.80 | Ratio: 87%
+Shift: VERY_STRONG_SHIFT
+Spread: EXPANDING
+Orange: STRONG_ORANGE_PRESSURE
+Compression: NONE
+Health: VERY_STRONG_DOWN_TREND
+
 ## Notebook Workflow
 
 ### `backtest_research.ipynb`
@@ -196,8 +260,11 @@ VWAP-probability-band-engine/
 │   ├── replay_python.ipynb
 │   └── live_trading.ipynb
 ├── src/
+│   ├── __init__.py
+│   ├── adaptive_trend_health.py
 │   ├── calibration.py
 │   ├── config.py
+│   ├── context_overlay.py
 │   ├── context.py
 │   ├── engine.py
 │   ├── evaluation.py
@@ -210,11 +277,16 @@ VWAP-probability-band-engine/
 │   ├── plotting.py
 │   ├── reference.py
 │   ├── replay.py
+│   ├── session_times.py
 │   ├── sigma.py
 │   ├── signals.py
 │   ├── splits.py
+│   ├── startup.py
+│   ├── walk_forward.py
 │   └── zones.py
 ├── tests/
+├── .gitignore
+├── LICENSE
 ├── README.md
 └── requirements.txt
 
