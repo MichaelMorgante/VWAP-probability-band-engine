@@ -205,6 +205,7 @@ Spread: EXPANDING
 Orange: STRONG_ORANGE_PRESSURE
 Compression: NONE
 Health: VERY_STRONG_DOWN_TREND
+```
 
 ## Notebook Workflow
 
