@@ -42,6 +42,38 @@ CONFIG = {
     'trend_slope_threshold': 0.08,
     'bias_z_threshold': 0.50,
 
+    # ── Adaptive trend health ─────────────────────────────────────
+    # Discretionary context layer, not an entry signal.
+    'adaptive_trend_history_bars': 80,
+
+    # Trend persistence.
+    'adaptive_trend_building_bars': 4,
+    'adaptive_trend_confirm_bars': 7,
+    'adaptive_trend_established_bars': 11,
+    'adaptive_trend_extended_bars': 16,
+
+    # Allows a strong trend to breathe instead of ending on the first pullback.
+    'adaptive_trend_break_bars': 3,
+
+    # Shift windows.
+    'adaptive_shift_baseline_window': 7,
+    'adaptive_shift_current_window': 3,
+
+    # Directional red-band shift thresholds, in US100/Nasdaq points.
+    # These measure the red band moving in the trend direction.
+    'adaptive_red_shift_extreme_event': 40.0,
+    'adaptive_red_shift_very_high_vol': 20.0,
+    'adaptive_red_shift_very_strong': 12.0,
+    'adaptive_red_shift_strong': 8.0,
+    'adaptive_red_shift_good': 5.0,
+    'adaptive_red_shift_minimum': 3.0,
+
+    # Orange touch is treated as impulse/extension pressure.
+    'adaptive_orange_pressure_window': 10,
+
+    # 0.0 means any band-width shrink counts as compression.
+    'adaptive_compression_tolerance': 0.0,
+
     # Minimum observations to trust a probability estimate
     'min_sample_count': 100,
 
