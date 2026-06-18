@@ -198,7 +198,7 @@ The MT5 overlay displays this as a separate left-panel block below the current s
 ```text
 Adaptive Trend Health
 ---------------------
-State: CONFIRMED_DOWN_TREND | Lane: 9
+State: CONFIRMED_DOWN_TREND | Trend hold: 9
 Avg red: 12.40 | Last red: 10.80 | Ratio: 87%
 Avg class: VERY_STRONG_SHIFT
 Spread: EXPANDING
@@ -206,6 +206,7 @@ Orange: STRONG_ORANGE_PRESSURE
 Compression: NONE
 Health: VERY_STRONG_DOWN_TREND
 ```
+`Trend hold` counts how many recent candles have held the adaptive trend structure, not how many candles are green/red or how many candles are strictly between green and orange.
 `Avg red` is the median directional red-band shift over recent qualifying trend-lane candles.  
 `Last red` is the most recent closed candle’s directional red-band shift.  
 `Ratio` is `Last red / Avg red`.
