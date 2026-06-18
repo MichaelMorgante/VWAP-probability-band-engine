@@ -157,6 +157,29 @@ For bearish conditions, it monitors whether price is below VWAP, VWAP is falling
 
 Orange-band touches are treated as impulse or extension pressure, not as automatic trend-ending signals.
 
+#### Directional red-band shift
+
+Trend strength is measured using the red band moving in the direction of the active trend.
+
+For an upward trend:
+
+$$
+D_t^{up} = \max(B_{3,+}(t) - B_{3,+}(t-1), 0)
+$$
+
+For a downward trend:
+
+$$
+D_t^{down} = \max(B_{3,-}(t-1) - B_{3,-}(t), 0)
+$$
+
+The panel displays:
+
+$$
+\text{Ratio}_t =
+\frac{\text{Last red shift}_t}{\text{Average red shift}_t}.
+$$
+
 The current default thresholds are:
 
 | Component | Value |
