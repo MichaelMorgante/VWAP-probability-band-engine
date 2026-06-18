@@ -816,6 +816,7 @@ void DrawOverlay()
          label = label + "\nReason: " + g_suppressed_by;
 
       label = label + "\n\nAdaptive Trend Health";
+      label = label + "\n---------------------";
 
       label = label + StringFormat(
           "\nState: %s | Count: %.0f",

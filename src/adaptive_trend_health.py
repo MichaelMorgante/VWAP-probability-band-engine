@@ -249,6 +249,7 @@ def update_adaptive_trend_health(
     current_window = int(config.get("adaptive_shift_current_window", 3))
     orange_window = int(config.get("adaptive_orange_pressure_window", 10))
     compression_tolerance = float(config.get("adaptive_compression_tolerance", 0.0))
+    lane_shift_tolerance = abs(float(config.get("adaptive_lane_shift_tolerance", 0.0)))
 
     close = _as_float(bar.get("close"))
     open_ = _as_float(bar.get("open"), close)
@@ -302,22 +303,33 @@ def update_adaptive_trend_health(
 
     row["compressing"] = row["band_width_shift"] < -abs(compression_tolerance)
 
-    # Trend-lane logic.
-    # UP = price holds above upper green while VWAP/green/orange shift up.
-    # DOWN = price holds below lower green while VWAP/green/orange shift down.
-    # Orange touch is allowed.
+    # Relaxed trend-lane logic.
+    #
+    # The trend should not die just because price is no longer beyond green.
+    # A strong trend can touch orange, bands can reprice, and price can then sit
+    # between VWAP and green while the trend is still active.
+    #
+    # Trend existence:
+    # - UP: price holds above VWAP and VWAP is rising
+    # - DOWN: price holds below VWAP and VWAP is falling
+    #
+    # Green/orange band shifts are allowed tiny noise using lane_shift_tolerance.
+    # Red-band movement still determines trend strength later.
+    row["up_above_green"] = row["close"] > row["band_1p"]
+    row["down_below_green"] = row["close"] < row["band_1n"]
+
     row["up_lane"] = (
-        row["close"] > row["band_1p"]
+        row["close"] > row["reference"]
         and row["reference_shift"] > 0
-        and row["band_1p_shift"] > 0
-        and row["band_2p_shift"] > 0
+        and row["band_1p_shift"] >= -lane_shift_tolerance
+        and row["band_2p_shift"] >= -lane_shift_tolerance
     )
 
     row["down_lane"] = (
-        row["close"] < row["band_1n"]
+        row["close"] < row["reference"]
         and row["reference_shift"] < 0
-        and row["band_1n_shift"] < 0
-        and row["band_2n_shift"] < 0
+        and row["band_1n_shift"] <= lane_shift_tolerance
+        and row["band_2n_shift"] <= lane_shift_tolerance
     )
 
     # Directional red-band shift.

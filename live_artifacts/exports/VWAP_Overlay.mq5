@@ -10,6 +10,7 @@ input string JsonPath = "live_state.json";
 
 // Display toggles
 input bool ShowBands   = true;
+input bool AnchorBandsToStartup = true;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
 input bool ShowBandTable = true;
@@ -36,9 +37,7 @@ input color ColorSessionLabel = clrMediumPurple;
 
 // Candle countdown
 input bool ShowCandleCountdown = true;
-input int CountdownWarningSeconds = 10;
 input color ColorCountdownNormal = clrWhite;
-input color ColorCountdownWarning = clrRed;
 
 // Session open anchors
 input bool AutoSessionDST = true;
@@ -57,6 +56,26 @@ double g_reference_shift_5 = 0;
 string g_zone = "", g_signal_type = "NO_SIGNAL", g_trend = "";
 string g_trend_display = "FLAT", g_bias_display = "NEUTRAL";
 string g_setup_type = "NEUTRAL", g_signal_display = "WAIT", g_suppressed_by = "";
+string g_adaptive_trend_direction = "NONE";
+string g_adaptive_trend_state = "NO_TREND";
+string g_adaptive_shift_class = "WEAK_SHIFT";
+string g_adaptive_spread_state = "NOT_EXPANDING";
+string g_adaptive_orange_pressure = "NO_ORANGE_PRESSURE";
+string g_adaptive_compression = "NONE";
+string g_adaptive_trend_health = "NO_TREND";
+
+double g_adaptive_lane_count = 0.0;
+double g_adaptive_red_shift = 0.0;
+double g_adaptive_current_red_shift = 0.0;
+double g_adaptive_shift_ratio = 0.0;
+string g_startup_mode = "";
+string g_startup_label = "";
+string g_startup_overlay_visual_start = "";
+string g_startup_start_uk = "";
+string g_startup_start_server = "";
+string g_startup_line_start_uk = "";
+string g_startup_line_start_server = "";
+string g_startup_anchor_active = "NO";
 double g_p_mr = 0, g_edge_gap = 0;
 double g_band1p = 0, g_band1n = 0;
 double g_band2p = 0, g_band2n = 0;
@@ -73,7 +92,7 @@ double g_prev_band3p = 0, g_prev_band3n = 0;
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   EventSetTimer(1); // poll JSON every 5 seconds
+   EventSetTimer(1); // poll JSON every 1 seconds
    return(INIT_SUCCEEDED);
   }
 
@@ -136,6 +155,26 @@ void ReadJsonState()
    string new_setup_type     = ExtractString(content, "setup_type");
    string new_signal_display = ExtractString(content, "signal_display");
    string new_suppressed_by  = ExtractString(content, "suppressed_by");
+   string new_adaptive_trend_direction = ExtractString(content, "adaptive_trend_direction");
+   string new_adaptive_trend_state = ExtractString(content, "adaptive_trend_state");
+   string new_adaptive_shift_class = ExtractString(content, "adaptive_shift_class");
+   string new_adaptive_spread_state = ExtractString(content, "adaptive_spread_state");
+   string new_adaptive_orange_pressure = ExtractString(content, "adaptive_orange_pressure");
+   string new_adaptive_compression = ExtractString(content, "adaptive_compression");
+   string new_adaptive_trend_health = ExtractString(content, "adaptive_trend_health");
+
+   double new_adaptive_lane_count = ExtractDouble(content, "adaptive_lane_count");
+   double new_adaptive_red_shift = ExtractDouble(content, "adaptive_red_shift");
+   double new_adaptive_current_red_shift = ExtractDouble(content, "adaptive_current_red_shift");
+   double new_adaptive_shift_ratio = ExtractDouble(content, "adaptive_shift_ratio");
+   string new_startup_mode = ExtractString(content, "startup_mode");
+   string new_startup_label = ExtractString(content, "startup_label");
+   string new_startup_overlay_visual_start = ExtractString(content, "startup_overlay_visual_start");
+   string new_startup_start_uk = ExtractString(content, "startup_start_uk");
+   string new_startup_start_server = ExtractString(content, "startup_start_server");
+   string new_startup_line_start_uk = ExtractString(content, "startup_line_start_uk");
+   string new_startup_line_start_server = ExtractString(content, "startup_line_start_server");
+   string new_startup_anchor_active = ExtractString(content, "startup_anchor_active");
 
    // only shift current -> previous if values actually changed
    bool changed =
@@ -177,6 +216,19 @@ void ReadJsonState()
       g_signal_display = new_signal_display;
       g_bias_display   = new_bias_display;
       g_suppressed_by  = new_suppressed_by;
+
+      g_adaptive_trend_direction = new_adaptive_trend_direction;
+      g_adaptive_trend_state = new_adaptive_trend_state;
+      g_adaptive_shift_class = new_adaptive_shift_class;
+      g_adaptive_spread_state = new_adaptive_spread_state;
+      g_adaptive_orange_pressure = new_adaptive_orange_pressure;
+      g_adaptive_compression = new_adaptive_compression;
+      g_adaptive_trend_health = new_adaptive_trend_health;
+
+      g_adaptive_lane_count = new_adaptive_lane_count;
+      g_adaptive_red_shift = new_adaptive_red_shift;
+      g_adaptive_current_red_shift = new_adaptive_current_red_shift;
+      g_adaptive_shift_ratio = new_adaptive_shift_ratio;
      }
    else
      {
@@ -194,7 +246,29 @@ void ReadJsonState()
       g_signal_display = new_signal_display;
       g_bias_display   = new_bias_display;
       g_suppressed_by  = new_suppressed_by;
+
+      g_adaptive_trend_direction = new_adaptive_trend_direction;
+      g_adaptive_trend_state = new_adaptive_trend_state;
+      g_adaptive_shift_class = new_adaptive_shift_class;
+      g_adaptive_spread_state = new_adaptive_spread_state;
+      g_adaptive_orange_pressure = new_adaptive_orange_pressure;
+      g_adaptive_compression = new_adaptive_compression;
+      g_adaptive_trend_health = new_adaptive_trend_health;
+
+      g_adaptive_lane_count = new_adaptive_lane_count;
+      g_adaptive_red_shift = new_adaptive_red_shift;
+      g_adaptive_current_red_shift = new_adaptive_current_red_shift;
+      g_adaptive_shift_ratio = new_adaptive_shift_ratio;
      }
+
+     g_startup_mode = new_startup_mode;
+     g_startup_label = new_startup_label;
+     g_startup_overlay_visual_start = new_startup_overlay_visual_start;
+     g_startup_start_uk = new_startup_start_uk;
+     g_startup_start_server = new_startup_start_server;
+     g_startup_line_start_uk = new_startup_line_start_uk;
+     g_startup_line_start_server = new_startup_line_start_server;
+     g_startup_anchor_active = new_startup_anchor_active;
   }
 
 //+------------------------------------------------------------------+
@@ -223,14 +297,80 @@ string ExtractString(string json, string key)
 //+------------------------------------------------------------------+
 void DrawHLine(string name, double price, color clr, int width, int style)
   {
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
-   ObjectSetDouble(0, name, OBJPROP_PRICE, price);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
-   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+    if(ObjectFind(0, name) >= 0 && ObjectGetInteger(0, name, OBJPROP_TYPE) != OBJ_HLINE)
+        ObjectDelete(0, name);
+
+    if(ObjectFind(0, name) < 0)
+        ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+
+    ObjectSetDouble(0, name, OBJPROP_PRICE, price);
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+    ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+    ObjectSetInteger(0, name, OBJPROP_BACK, true);
   }
+
+//+------------------------------------------------------------------+
+datetime GetStartupAnchorTime()
+{
+    if(!AnchorBandsToStartup)
+        return 0;
+
+    if(g_startup_anchor_active != "YES")
+        return 0;
+
+    string anchor_text = g_startup_line_start_server;
+
+    // Backward compatibility: if the new line-start field is missing,
+    // fall back to the original selected session start.
+    if(StringLen(anchor_text) < 10)
+        anchor_text = g_startup_start_server;
+
+    if(StringLen(anchor_text) < 10)
+        return 0;
+
+    datetime anchor_time = StringToTime(anchor_text);
+
+    if(anchor_time <= 0)
+        return 0;
+
+    if(anchor_time >= TimeCurrent())
+        return 0;
+
+    return anchor_time;
+}
+
+//+------------------------------------------------------------------+
+void DrawBandLine(string name, double price, color clr, int width, int style)
+{
+    datetime anchor_time = GetStartupAnchorTime();
+
+    if(anchor_time <= 0)
+    {
+        DrawHLine(name, price, clr, width, style);
+        return;
+    }
+
+    datetime end_time = TimeCurrent();
+
+    if(ObjectFind(0, name) >= 0 && ObjectGetInteger(0, name, OBJPROP_TYPE) != OBJ_TREND)
+        ObjectDelete(0, name);
+
+    if(ObjectFind(0, name) < 0)
+        ObjectCreate(0, name, OBJ_TREND, 0, anchor_time, price, end_time, price);
+
+    ObjectMove(0, name, 0, anchor_time, price);
+    ObjectMove(0, name, 1, end_time, price);
+
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+    ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+    ObjectSetInteger(0, name, OBJPROP_BACK, true);
+    ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, true);
+    ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
+    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
 
 //+------------------------------------------------------------------+
 void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
@@ -468,32 +608,32 @@ double GetSessionOpenPrice(bool is_new_york)
 
 //+------------------------------------------------------------------+
 void DrawMoveLabel(string object_name, string label_text, double anchor_price, int x, int y)
-{
-    if(anchor_price <= 0.0)
-    {
-        DrawLabel(object_name, label_text + ": • 0.00 pts", x, y, ColorSessionLabel, TableFontSize);
-        return;
-    }
+  {
+   if(anchor_price <= 0.0)
+     {
+      DrawLabel(object_name, label_text + ": • 0.00 pts", x, y, ColorSessionLabel, TableFontSize);
+      return;
+     }
 
-    double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double diff = live_price - anchor_price;
+   double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double diff = live_price - anchor_price;
 
-    string arrow = "•";
+   string arrow = "•";
 
-    if(diff > 0.0)
-        arrow = "▲";
-    else if(diff < 0.0)
-        arrow = "▼";
+   if(diff > 0.0)
+      arrow = "▲";
+   else if(diff < 0.0)
+      arrow = "▼";
 
-    DrawLabel(
-        object_name,
-        StringFormat("%s: %s %.2f pts", label_text, arrow, MathAbs(diff)),
-        x,
-        y,
-        ColorSessionLabel,
-        TableFontSize
-    );
-}
+   DrawLabel(
+      object_name,
+      StringFormat("%s: %s %.2f pts", label_text, arrow, MathAbs(diff)),
+      x,
+      y,
+      ColorSessionLabel,
+      TableFontSize
+   );
+  }
   
 //+------------------------------------------------------------------+
 void DrawFromStartLabel()
@@ -531,62 +671,55 @@ void DrawFromStartLabel()
    double ny_open_price = GetSessionOpenPrice(true);
    DrawMoveLabel("VWAP_NY_OPEN", "NY open", ny_open_price, x, y);
   }
-    
 
 //+------------------------------------------------------------------+
 void DrawCandleCountdownLabel()
-{
-    if(!ShowCandleCountdown)
-        return;
+  {
+   if(!ShowCandleCountdown)
+      return;
 
-    int period_seconds = PeriodSeconds(_Period);
-    if(period_seconds <= 0)
-        return;
+   int period_seconds = PeriodSeconds(_Period);
+   if(period_seconds <= 0)
+      return;
 
-    datetime candle_open_time = iTime(_Symbol, _Period, 0);
-    datetime now_time = TimeCurrent();
+   datetime candle_open_time = iTime(_Symbol, _Period, 0);
+   datetime now_time = TimeCurrent();
 
-    int elapsed = (int)(now_time - candle_open_time);
-    int remaining = period_seconds - elapsed;
+   int elapsed = (int)(now_time - candle_open_time);
+   int remaining = period_seconds - elapsed;
 
-    if(remaining < 0)
-        remaining = 0;
-    if(remaining > period_seconds)
-        remaining = period_seconds;
+   if(remaining < 0)
+      remaining = 0;
+   if(remaining > period_seconds)
+      remaining = period_seconds;
 
-    int mins = remaining / 60;
-    int secs = remaining % 60;
+   int mins = remaining / 60;
+   int secs = remaining % 60;
 
-    double candle_open = iOpen(_Symbol, _Period, 0);
-    double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double candle_open = iOpen(_Symbol, _Period, 0);
+   double live_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-    string arrow = "•";
-    color countdown_clr = ColorCountdownNormal;
+   string arrow = "•";
+   color countdown_clr = ColorCountdownNormal;
 
-    if(live_price > candle_open)
-    {
-        arrow = "▲";
-        countdown_clr = ColorMoveUp;
-    }
-    else if(live_price < candle_open)
-    {
-        arrow = "▼";
-        countdown_clr = ColorMoveDown;
-    }
+   if(live_price > candle_open)
+     {
+      arrow = "▲";
+      countdown_clr = ColorMoveUp;
+     }
+   else if(live_price < candle_open)
+     {
+      arrow = "▼";
+      countdown_clr = ColorMoveDown;
+     }
 
-    // Optional: final warning seconds become red regardless.
-    if(remaining <= CountdownWarningSeconds)
-        countdown_clr = ColorCountdownWarning;
-
-    DrawLabel(
-        "VWAP_CANDLE_COUNTDOWN",
-        StringFormat("Candle close: %02d:%02d %s", mins, secs, arrow),
-        TableXOffset,
-        TableYOffset,
-        countdown_clr,
-        TableFontSize
-    );
-}
+   DrawLabel("VWAP_CANDLE_COUNTDOWN",
+             StringFormat("Candle close: %02d:%02d %s", mins, secs, arrow),
+             TableXOffset,
+             TableYOffset,
+             countdown_clr,
+             TableFontSize);
+  }
   
 //+------------------------------------------------------------------+
 void DrawBandTable()
@@ -638,16 +771,15 @@ void DrawBandTable()
 //+------------------------------------------------------------------+
 void DrawOverlay()
   {
-   if(ShowBands && g_reference > 0)
-     {
-      DrawHLine("VWAP_REF",   g_reference, ColorVWAP,  2, STYLE_SOLID);
-      DrawHLine("VWAP_1P",    g_band1p,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_1N",    g_band1n,    ColorBand1, 1, STYLE_DOT);
-      DrawHLine("VWAP_2P",    g_band2p,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_2N",    g_band2n,    ColorBand2, 1, STYLE_DASH);
-      DrawHLine("VWAP_3P",    g_band3p,    ColorBand3, 1, STYLE_DASHDOT);
-      DrawHLine("VWAP_3N",    g_band3n,    ColorBand3, 1, STYLE_DASHDOT);
-     }
+   if(ShowBands && g_reference > 0) {
+       DrawBandLine("VWAP_REF", g_reference, ColorVWAP, 2, STYLE_SOLID);
+       DrawBandLine("VWAP_1P", g_band1p, ColorBand1, 1, STYLE_DOT);
+       DrawBandLine("VWAP_1N", g_band1n, ColorBand1, 1, STYLE_DOT);
+       DrawBandLine("VWAP_2P", g_band2p, ColorBand2, 1, STYLE_DASH);
+       DrawBandLine("VWAP_2N", g_band2n, ColorBand2, 1, STYLE_DASH);
+       DrawBandLine("VWAP_3P", g_band3p, ColorBand3, 1, STYLE_DASHDOT);
+       DrawBandLine("VWAP_3N", g_band3n, ColorBand3, 1, STYLE_DASHDOT);
+  }
 
    DrawCandleCountdownLabel();
 
@@ -669,6 +801,47 @@ void DrawOverlay()
 
       if(g_signal_display == "WAIT" && StringLen(g_suppressed_by) > 0)
          label = label + "\nReason: " + g_suppressed_by;
+
+      label = label + "\n\nAdaptive Trend Health";
+
+      label = label + StringFormat(
+          "\nState: %s | Count: %.0f",
+          g_adaptive_trend_state,
+          g_adaptive_lane_count
+      );
+
+      label = label + StringFormat(
+          "\nRed shift: %.2f | Current: %.2f | Ratio: %.0f%%",
+          g_adaptive_red_shift,
+          g_adaptive_current_red_shift,
+          g_adaptive_shift_ratio * 100.0
+      );
+
+      label = label + StringFormat(
+          "\nShift: %s",
+          g_adaptive_shift_class
+      );
+
+      label = label + StringFormat(
+          "\nSpread: %s",
+          g_adaptive_spread_state
+      );
+
+      label = label + StringFormat(
+          "\nOrange: %s",
+          g_adaptive_orange_pressure
+      );
+
+      label = label + StringFormat(
+          "\nCompression: %s",
+          g_adaptive_compression
+      );
+
+      label = label + StringFormat(
+          "\nHealth: %s",
+          g_adaptive_trend_health
+      );
+
 
       Comment(label);
      }

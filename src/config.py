@@ -47,13 +47,13 @@ CONFIG = {
     'adaptive_trend_history_bars': 80,
 
     # Trend persistence.
-    'adaptive_trend_building_bars': 4,
+    'adaptive_trend_building_bars': 3,
     'adaptive_trend_confirm_bars': 7,
     'adaptive_trend_established_bars': 11,
     'adaptive_trend_extended_bars': 16,
 
     # Allows a strong trend to breathe instead of ending on the first pullback.
-    'adaptive_trend_break_bars': 3,
+    'adaptive_trend_break_bars': 5,
 
     # Shift windows.
     'adaptive_shift_baseline_window': 7,
@@ -71,8 +71,10 @@ CONFIG = {
     # Orange touch is treated as impulse/extension pressure.
     'adaptive_orange_pressure_window': 10,
 
-    # 0.0 means any band-width shrink counts as compression.
-    'adaptive_compression_tolerance': 0.0,
+    # 0.25 means any band-width shrink counts as compression.
+    'adaptive_compression_tolerance': 0.25,
+    # Allows tiny green/orange band shift noise without killing the trend lane.
+    'adaptive_lane_shift_tolerance': 0.25,
 
     # Minimum observations to trust a probability estimate
     'min_sample_count': 100,
