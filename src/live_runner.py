@@ -196,8 +196,27 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
         )
 
     print(f"✅ Live engine warmed up on {len(warmup_df):,} bars")
+    # If preset/manual startup replay was used, the warmup dataframe already
+    # contains candles up to the current/latest available bar.
+    #
+    # Set last_bar_time to the final replayed candle so the live loop continues
+    # AFTER the replay, instead of processing the same latest candle again.
+    #
+    # In normal "now" mode, keep last_bar_time=None to preserve existing behaviour.
+    startup_replay_active = (
+        initial_df is not None
+        and session_info is not None
+        and bool(session_info.get("startup_rebuild_used", False))
+    )
 
-    last_bar_time = None
+    if startup_replay_active and "datetime" in warmup_df.columns:
+        last_bar_time = pd.to_datetime(warmup_df["datetime"].max(), utc=True)
+        print(f"✅ Startup replay complete. Live loop will continue after: {last_bar_time}")
+    else:
+        last_bar_time = None
+
+    # last_bar_time is set after warmup.
+    # In normal "now" mode it remains None, preserving old behaviour.
     signal_state = 'NO_SIGNAL'   # state machine
     active_signal = None         # the SignalResult currently active
     reconnect_wait = 1
