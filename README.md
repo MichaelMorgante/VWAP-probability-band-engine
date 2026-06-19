@@ -267,6 +267,133 @@ It:
 - writes live JSON state,
 - generates the MQL5 overlay source file.
 
+## Usage Modes
+
+This repository supports three main workflows:
+
+| Mode                | Notebook / Files                                                            | Purpose                                                                                                                  |
+| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Research / Backtest | `notebooks/backtest_research.ipynb`                                         | Calibrate probability tables, evaluate historical signal behaviour, and export research artifacts.                       |
+| Replay              | `notebooks/replay_python.ipynb`                                             | Step through historical data bar by bar with no look-ahead.                                                              |
+| Live MT5 Monitoring | `notebooks/live_trading.ipynb`, `src/live_runner.py`, `src/mql5_overlay.py` | Run the live engine, export `live_state.json`, and display VWAP bands, signal context, and Adaptive Trend Health on MT5. |
+
+The live overlay is intended as a discretionary decision-support tool, not a fully automated trading system.
+
+## Setup Guide
+
+Clone the repository:
+
+```bash
+git clone https://github.com/MichaelMorgante/VWAP-probability-band-engine.git
+cd VWAP-probability-band-engine
+```
+
+Create and activate a virtual environment:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+For live MT5 usage, MetaTrader 5 must be installed and logged in to the account or data feed being used. The Python environment also needs access to the `MetaTrader5` package from `requirements.txt`.
+
+## Running the Project
+
+### 1. Research / backtest workflow
+
+Open:
+
+```text
+notebooks/backtest_research.ipynb
+```
+
+This notebook is used to:
+
+* load historical intraday data,
+* compute VWAP/TWAP references and sigma bands,
+* classify z-score zones,
+* label mean-reversion / continuation / neutral outcomes,
+* calibrate empirical probability tables,
+* evaluate signal quality,
+* export research artifacts.
+
+### 2. Replay workflow
+
+Open:
+
+```text
+notebooks/replay_python.ipynb
+```
+
+This notebook replays historical data bar by bar. It is useful for checking that the engine behaves consistently without look-ahead bias.
+
+### 3. Live MT5 workflow
+
+Open:
+
+```text
+notebooks/live_trading.ipynb
+```
+
+The live workflow:
+
+1. connects to MT5,
+2. loads or exports live-use artifacts,
+3. runs the live engine,
+4. writes the latest state to `live_artifacts/states/live_state.json`,
+5. generates the MQL5 overlay source file,
+6. displays VWAP bands, signal context, and Adaptive Trend Health on MT5.
+
+After generating the overlay, compile the generated `.mq5` file in MetaEditor and attach it to the relevant MT5 chart.
+
+## Key Live Outputs
+
+The live engine writes a JSON state file containing values such as:
+
+| Field type            | Examples                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Reference / bands     | VWAP/TWAP, sigma bands, z-score, zone                                                                        |
+| Signal context        | signal type, signal display, bias, setup type, suppression reason                                            |
+| Probability context   | mean-reversion probability, continuation probability, edge gap                                               |
+| Adaptive Trend Health | trend state, trend hold, average red shift, last red shift, spread state, orange pressure, compression state |
+
+The MQL5 overlay reads this JSON file and displays the live state directly on the MT5 chart.
+
+## Configuration Notes
+
+Most key parameters are controlled in:
+
+```text
+src/config.py
+```
+
+Important groups include:
+
+| Config group          | Purpose                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| Reference settings    | VWAP/TWAP choice and session reset behaviour                                       |
+| Sigma settings        | Volatility-band construction                                                       |
+| Context settings      | Trend, bias, volume, and time-of-day context                                       |
+| Signal settings       | Edge thresholds, warmup rules, accepted zones, and filtering                       |
+| Adaptive Trend Health | Trend-hold bars, red-band shift thresholds, expansion logic, compression tolerance |
+
+Adaptive Trend Health is intentionally configurable because the useful thresholds can vary by instrument, session, volatility regime, and trading style.
+
+## Limitations
+
+* This project is for research, replay, and discretionary live monitoring.
+* Signal outputs are not guaranteed trading recommendations.
+* Live behaviour depends on data quality, broker/server timestamps, spreads, slippage, session definitions, and market regime.
+* Adaptive Trend Health is a rule-based context layer and should be validated against historical and live observations before being used in decision-making.
+* Backtest and replay results may not match live trading exactly due to execution costs, latency, and changing market conditions.
+
+
 ## Repository Structure
 
 ```text
@@ -317,6 +444,7 @@ VWAP-probability-band-engine/
 ├── LICENSE
 ├── README.md
 └── requirements.txt
+```
 
 ## License
 
