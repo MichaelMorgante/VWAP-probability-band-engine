@@ -2,6 +2,20 @@
 
 Intraday VWAP probability band engine for backtesting, replay analysis, and live MT5 monitoring.
 
+## Live MT5 Overlay
+
+The live MT5 overlay displays VWAP probability bands, z-score/zone context, mean-reversion probability, continuation probability, signal state, session distance, volume behaviour, and Adaptive Trend Health directly on the trading chart.
+
+![Live MT5 overlay with volume spike](docs/images/mt5-live-overlay-volume-spike.png)
+
+The overlay is designed for discretionary monitoring and research validation. It does not automatically place trades.
+
+### Full Band View
+
+The full-band view shows the wider VWAP probability structure, including outer sigma bands, VWAP, session distance, and the live probability/state panel.
+
+![Full VWAP probability band view](docs/images/mt5-full-bands-view.png)
+
 ## Intraday VWAP Probability Bands Under Discrete-Time Market Data
 
 This project studies how intraday price behaves relative to a session-reset reference line, usually VWAP, and whether deviations from that reference historically tend to mean-revert, continue, or remain neutral. It combines intraday data loading, VWAP / sigma band construction, z-score normalisation, empirical probability calibration, filtered signal generation, replay stepping, and live MT5 monitoring in one structured Python repository.
@@ -406,6 +420,10 @@ VWAP-probability-band-engine/
 ├── data/
 │   ├── historical/
 │   └── snapshots/
+├── docs/
+│   └── images/
+│       ├── mt5-live-overlay-volume-spike.png
+│       └── mt5-full-bands-view.png
 ├── live_artifacts/
 │   ├── exports/
 │   ├── plots/
