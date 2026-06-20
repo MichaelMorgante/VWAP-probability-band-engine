@@ -13,3 +13,5 @@ htmlcov/
 artifacts/tables/replay_output.parquet
 
 *.ex5
+
+artifacts/automated_vwap_v1/
