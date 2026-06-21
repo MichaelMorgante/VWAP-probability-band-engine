@@ -17,3 +17,11 @@ artifacts/tables/replay_output.parquet
 artifacts/automated_vwap_v1/
 artifacts/automated_vwap_v2/
 artifacts/automated_vwap_v3/
+
+# Ignore generated artifacts by default
+artifacts/**
+
+# Keep curated GitHub report charts
+!artifacts/
+!artifacts/report_charts/
+!artifacts/report_charts/*.png
