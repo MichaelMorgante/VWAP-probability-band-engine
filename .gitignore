@@ -15,3 +15,5 @@ artifacts/tables/replay_output.parquet
 *.ex5
 
 artifacts/automated_vwap_v1/
+artifacts/automated_vwap_v2/
+artifacts/automated_vwap_v3/
