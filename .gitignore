@@ -17,6 +17,7 @@ artifacts/tables/replay_output.parquet
 artifacts/automated_vwap_v1/
 artifacts/automated_vwap_v2/
 artifacts/automated_vwap_v3/
+artifacts/automated_vwap_v4/
 
 # Ignore generated artifacts by default
 artifacts/**
