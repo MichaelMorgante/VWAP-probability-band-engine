@@ -1,6 +1,49 @@
 # VWAP-probability-band-engine
 
-Intraday VWAP probability band engine for backtesting, replay analysis, and live MT5 monitoring.
+Intraday VWAP probability-band research framework for historical calibration, no-lookahead replay, live MT5 monitoring, and automated strategy backtesting.
+
+This project studies how intraday Nasdaq / US100 price behaves around a session-reset VWAP/TWAP reference line and converts that behaviour into a structured research pipeline: probability bands, z-score zones, empirical mean-reversion / continuation probabilities, contextual filters, live overlay state, and automated backtest runners.
+
+The repository now contains two connected layers:
+
+1. **Discretionary probability engine** — VWAP bands, probability state, Adaptive Trend Health, replay validation, and live MT5 overlay monitoring.
+2. **Automated execution research layer** — fixed-rule continuation strategy notebooks, configurable risk controls, trade logs, skipped-signal logs, daily summaries, multi-dataset comparisons, and a current V5 modular engine.
+
+The project is research-focused. It does not automatically place live trades.
+
+## Current Project Scope
+
+The engine has evolved from a VWAP probability-band overlay into a broader intraday strategy research environment.
+
+It now supports:
+
+- historical VWAP/TWAP probability-band calibration,
+- z-score zone classification,
+- mean-reversion / continuation / neutral outcome labelling,
+- context modelling using trend, volume, time-of-day, and z-score velocity,
+- replay testing without look-ahead bias,
+- live MT5 monitoring through generated MQL5 overlays,
+- Adaptive Trend Health for discretionary trend-quality assessment,
+- automated continuation-strategy research,
+- versioned automated strategy notebooks from V1 to V5,
+- a current V5 modular automated engine,
+- fixed Nasdaq-point execution simulation,
+- stop loss, take profit, breakeven, and daily risk-control modelling,
+- optional runner-mode / exit-management research,
+- trade-log, skipped-signal, daily-summary, and config-snapshot exports,
+- multi-dataset comparison across calm, volatile, Ukraine-war, recent, 30-day, and 1-year Nasdaq regimes.
+
+The long-term purpose is to develop a modular research workflow where each strategy idea can be isolated, tested, compared, and later promoted into a cleaner `.py` execution/backtest engine if it proves robust.
+
+## Current Main Notebook
+
+The current main automated strategy notebook is:
+
+    notebooks/automated_vwap_v5_modular_engine.ipynb
+
+This is the latest modular engine and should be treated as the primary automated backtest runner.
+
+Earlier automated notebooks are kept for research history and version isolation. They are useful for understanding how the strategy evolved, but V5 is the current combined engine.
 
 ## Live MT5 Overlay
 
@@ -248,50 +291,179 @@ Health: VERY_STRONG_DOWN_TREND
 `Last red` is the most recent closed candle’s directional red-band shift.  
 `Ratio` is `Last red / Avg red`.
 
+## Automated Strategy Research Layer
+
+The automated layer is separate from the discretionary MT5 overlay.
+
+The goal is to test whether parts of the VWAP Probability Band Engine can be converted into clear, rule-based execution models. Each automated notebook represents one strategy version, with its own config, trade simulator, risk controls, logs, and comparison output.
+
+The automated notebooks do not connect to MT5 and do not place live trades. They are historical backtest and strategy-research notebooks.
+
+### Shared execution model
+
+The automated notebooks use a fixed-point Nasdaq execution model:
+
+| Component | Default |
+|---|---:|
+| Stop loss | 29 points |
+| Take profit | 58 points |
+| Breakeven trigger | +29 points |
+| Risk per trade | 1% |
+| Daily stop rule | stop after 2 consecutive daily losses |
+| Daily profit cap | stop after +8% realised daily profit |
+| Entry timing | next bar open |
+| New-trade cutoff | 19:00 Europe/London |
+
+The notebooks export research artifacts such as:
+
+- trade logs,
+- daily summaries,
+- skipped-signal logs,
+- config snapshots,
+- multi-dataset comparison tables.
+
+### Automated strategy versions
+
+| Version | Notebook | Main idea |
+|---|---|---|
+| Research base | `notebooks/automated_execution_research.ipynb` | Exploratory notebook for testing whether discretionary VWAP setups can become rule-based execution logic. |
+| V1 | `notebooks/automated_vwap_v1.ipynb` | Baseline continuation-only model using green reclaim / rejection logic. |
+| V2 | `notebooks/automated_vwap_v2.ipynb` | V1-style continuation logic plus Adaptive Trend Health filtering. |
+| V3 | `notebooks/automated_vwap_v3.ipynb` | Second-close green reclaim / rejection continuation setup. |
+| V4 | `notebooks/automated_vwap_v4.ipynb` | Dynamic regime selector designed to route between continuation modules. |
+| V4.5 | `notebooks/automated_vwap_v4_5.ipynb` | V4 regime selector plus conditional V2 trend-health safety filtering. |
+| V5 | `notebooks/automated_vwap_v5_modular_engine.ipynb` | Current main automated engine. Modular strategy framework with V1/V2/V3/V4-style components, intelligent routing, optional manual module toggles, runner/exit-manager controls, richer diagnostics, skipped-signal logging, and experiment tracking. |
+
+V5 is currently the main automated strategy notebook. Earlier notebooks are preserved as isolated research versions so that each idea can be tested independently before being combined into the modular engine.
+
+## Automated VWAP V5 Modular Engine
+
+`automated_vwap_v5_modular_engine.ipynb` is the current main automated backtest notebook.
+
+V5 combines the earlier strategy experiments into a more modular research engine. Instead of treating V1, V2, V3, V4, and V4.5 as separate dead-end notebooks, V5 uses them as strategy components that can be toggled, routed, filtered, and compared.
+
+The V5 engine includes:
+
+- modular continuation-entry components,
+- S-tier and A-tier continuation logic,
+- optional Adaptive Trend Health filtering,
+- dynamic regime-routing controls,
+- manual module on/off switches,
+- configurable red-shift entry floors,
+- normal fixed SL / TP / breakeven settings,
+- optional runner-mode logic,
+- optional trailing / profit-lock research,
+- skipped-signal diagnostics,
+- trade-level output,
+- daily-summary output,
+- config snapshots,
+- comparison runs across multiple historical datasets,
+- automatic experiment logging.
+
+The purpose of V5 is to act as the current research hub for the automated VWAP strategy. Earlier notebooks remain useful because they isolate individual ideas, but V5 is where the strongest combined version is currently being tested.
+
 ## Notebook Workflow
 
-### `backtest_research.ipynb`
-Main research notebook.
+### Core research and discretionary workflow
+
+#### `backtest_research.ipynb`
+
+Main probability research notebook.
 
 It:
+
 - loads and checks historical data,
-- builds the reference line and sigma bands,
+- builds the VWAP/TWAP reference line,
+- constructs sigma bands,
 - classifies z-score zones,
 - computes context variables,
-- labels outcomes,
-- calibrates probability tables,
+- labels mean-reversion / continuation / neutral outcomes,
+- calibrates empirical probability tables,
 - evaluates signal quality,
 - plots overlays and probability heatmaps,
 - exports research artifacts.
 
-### `replay_python.ipynb`
-Replay notebook.
+#### `replay_python.ipynb`
 
-Python replay notebook.
+No-lookahead replay notebook.
 
-It steps through historical data one bar at a time with no look-ahead, using the same engine state transition as live monitoring. This is for validating replay behaviour inside Python before building any TradingView/Pine overlay. Once loaded into TradingView, we can backtest by simulating the information state that would have been available at bar $t$.
+It steps through historical data one bar at a time using only information that would have been available at that candle. This is used to validate live-style state transitions before relying on the MT5 overlay.
 
-### `live_trading.ipynb`
-Live MT5 notebook.
+#### `live_trading.ipynb`
+
+Live MT5 monitoring notebook.
 
 It:
+
 - connects to MT5,
 - loads or exports live-use artifacts,
 - runs the live engine,
 - writes live JSON state,
 - generates the MQL5 overlay source file.
 
+#### `live_trading_double_overlay.ipynb`
+
+Extended live-monitoring notebook for double-overlay experimentation.
+
+This is used for testing richer MT5 display workflows without changing the core research notebooks.
+
+### Automated execution workflow
+
+#### `automated_execution_research.ipynb`
+
+Exploratory automated-execution research notebook.
+
+This notebook investigates whether the discretionary VWAP probability model can be converted into rule-based execution logic. It is used to prototype green reclaim / rejection entries, fixed-point execution, daily risk controls, skipped-signal logs, and strategy-filter comparisons.
+
+#### `automated_vwap_v1.ipynb`
+
+Baseline automated continuation runner.
+
+V1 tests the first simple continuation-only setup.
+
+#### `automated_vwap_v2.ipynb`
+
+Trend-health-filtered continuation runner.
+
+V2 keeps the V1-style continuation idea but adds Adaptive Trend Health filtering before accepting trades.
+
+#### `automated_vwap_v3.ipynb`
+
+Second-close continuation runner.
+
+V3 tests whether waiting for a second completed close back inside the green trend zone improves entry quality.
+
+#### `automated_vwap_v4.ipynb`
+
+Dynamic regime-selection runner.
+
+V4 introduces the idea of routing between different continuation modules depending on market regime.
+
+#### `automated_vwap_v4_5.ipynb`
+
+Dynamic regime-selection runner with conditional safety filtering.
+
+V4.5 extends V4 by adding conditional V2 trend-health protection.
+
+#### `automated_vwap_v5_modular_engine.ipynb`
+
+Current main automated strategy notebook.
+
+V5 is the modular engine that combines the strongest ideas from the previous versions. It supports module toggles, intelligent routing, configurable entry filters, V2 trend-health controls, S-tier / A-tier diagnostics, runner-mode settings, exit-management controls, skipped-signal analysis, multi-dataset comparison, and automatic experiment logging.
+
 ## Usage Modes
 
-This repository supports three main workflows:
+| Mode | Main files | Purpose |
+|---|---|---|
+| Probability research | `notebooks/backtest_research.ipynb`, `src/calibration.py`, `src/labelling.py`, `src/zones.py` | Build VWAP/TWAP bands, classify zones, label outcomes, and calibrate historical probabilities. |
+| Replay validation | `notebooks/replay_python.ipynb`, `src/replay.py` | Step through historical candles without look-ahead bias and validate state transitions. |
+| Live MT5 monitoring | `notebooks/live_trading.ipynb`, `src/live_runner.py`, `src/mql5_overlay.py` | Export live state and display VWAP bands, signal context, and Adaptive Trend Health on MT5. |
+| Double-overlay live testing | `notebooks/live_trading_double_overlay.ipynb` | Test richer live MT5 display workflows. |
+| Automated execution research | `notebooks/automated_execution_research.ipynb` | Prototype rule-based entries, execution assumptions, risk controls, and filter comparisons. |
+| Versioned automated backtests | `notebooks/automated_vwap_v1.ipynb` to `notebooks/automated_vwap_v4_5.ipynb` | Compare isolated automated strategy versions across multiple historical regimes. |
+| Current automated engine | `notebooks/automated_vwap_v5_modular_engine.ipynb` | Main modular automated VWAP backtest runner combining the strongest continuation, filtering, routing, runner, logging, and diagnostic ideas. |
 
-| Mode                | Notebook / Files                                                            | Purpose                                                                                                                  |
-| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Research / Backtest | `notebooks/backtest_research.ipynb`                                         | Calibrate probability tables, evaluate historical signal behaviour, and export research artifacts.                       |
-| Replay              | `notebooks/replay_python.ipynb`                                             | Step through historical data bar by bar with no look-ahead.                                                              |
-| Live MT5 Monitoring | `notebooks/live_trading.ipynb`, `src/live_runner.py`, `src/mql5_overlay.py` | Run the live engine, export `live_state.json`, and display VWAP bands, signal context, and Adaptive Trend Health on MT5. |
-
-The live overlay is intended as a discretionary decision-support tool, not a fully automated trading system.
+The live overlay is intended as a discretionary decision-support tool. The automated notebooks are historical research/backtest tools. Neither layer currently places live trades automatically.
 
 ## Setup Guide
 
@@ -366,6 +538,36 @@ The live workflow:
 
 After generating the overlay, compile the generated `.mq5` file in MetaEditor and attach it to the relevant MT5 chart.
 
+### 4. Automated strategy research workflow
+
+Open:
+
+    notebooks/automated_vwap_v5_modular_engine.ipynb
+
+This is the current main automated VWAP backtest runner.
+
+Use this notebook to:
+
+- choose the dataset,
+- select the strategy preset,
+- toggle strategy modules,
+- test normal fixed SL / TP / breakeven behaviour,
+- test optional runner-mode behaviour,
+- compare results across historical regimes,
+- inspect trade logs,
+- inspect skipped-signal logs,
+- save experiment metadata.
+
+Earlier automated notebooks are kept for version isolation:
+
+    notebooks/automated_vwap_v1.ipynb
+    notebooks/automated_vwap_v2.ipynb
+    notebooks/automated_vwap_v3.ipynb
+    notebooks/automated_vwap_v4.ipynb
+    notebooks/automated_vwap_v4_5.ipynb
+
+These earlier notebooks are useful for checking whether a new V5 result is genuinely coming from the combined modular logic or from one specific inherited component.
+
 ## Key Live Outputs
 
 The live engine writes a JSON state file containing values such as:
@@ -378,6 +580,23 @@ The live engine writes a JSON state file containing values such as:
 | Adaptive Trend Health | trend state, trend hold, average red shift, last red shift, spread state, orange pressure, compression state |
 
 The MQL5 overlay reads this JSON file and displays the live state directly on the MT5 chart.
+
+## Automated Backtest Outputs
+
+The automated notebooks save version-specific outputs under `artifacts/`.
+
+Typical outputs include:
+
+| Output | Purpose |
+|---|---|
+| Trade log | Every simulated trade, including side, entry, exit, result, R-multiple, and exit reason. |
+| Daily summary | Daily realised performance, useful for checking loss streaks and FTMO-style daily risk behaviour. |
+| Skipped-signal log | Raw setups that were rejected by filters, useful for debugging whether a filter is too strict. |
+| Config snapshot | The exact strategy settings used for that run. |
+| Experiment log | Saved record of which settings produced which results. |
+| Comparison table | Strategy results across multiple datasets and market regimes. |
+
+This is designed so that different strategy versions can be tested without losing track of which settings produced which result.
 
 ## Configuration Notes
 
@@ -399,13 +618,60 @@ Important groups include:
 
 Adaptive Trend Health is intentionally configurable because the useful thresholds can vary by instrument, session, volatility regime, and trading style.
 
+## Historical Datasets
+
+The repository includes multiple US100 / Nasdaq M1 historical datasets for testing strategy behaviour across different regimes.
+
+Examples include:
+
+| Dataset | Intended use |
+|---|---|
+| `US100_cash_M1_NY_session_30d.csv` | Short recent sample for quick iteration. |
+| `US100_cash_M1_NY_session_1y.csv` | Broader one-year validation set. |
+| `US100_cash_M1_NY_session_calm_2021_partial.csv` | Calm-regime testing. |
+| `US100_cash_M1_NY_session_volatile_2022.csv` | Volatile-regime testing. |
+| `US100_cash_M1_NY_session_ukraine_war_2022_2023.csv` | Stress / event-regime testing. |
+| `US100_cash_M1_NY_session_recent_2025_2026.csv` | Recent-market validation. |
+| `us100_cash_M1_new_york_2023_01_01_to_2024_01_01.csv` | Full-year New York session data. |
+| `us100_cash_M1_new_york_2024_01_01_to_2025_01_01.csv` | Full-year New York session data. |
+
+The purpose of using multiple datasets is to check whether a strategy only works in one recent sample or remains stable across calm, volatile, event-driven, and recent regimes.
+
+## Strategy Research Philosophy
+
+The automated notebooks are intentionally versioned.
+
+Instead of constantly editing one notebook and losing track of what changed, each major idea is isolated first:
+
+- V1 tests the simplest continuation baseline.
+- V2 tests whether Adaptive Trend Health improves that baseline.
+- V3 tests whether waiting for a second close improves continuation quality.
+- V4 tests regime-based routing.
+- V4.5 tests regime routing with extra trend-health safety.
+- V5 combines the strongest ideas into one modular engine.
+
+This workflow makes it easier to answer:
+
+- Did the new rule actually improve the strategy?
+- Did it improve returns but damage drawdown?
+- Did it reduce bad trades or block good runners?
+- Does it work across multiple datasets or only one sample?
+- Is the result coming from the entry logic, the filter, the runner, or the risk controls?
+
+The aim is not to curve-fit one perfect backtest. The aim is to build a research process where strategy components can be compared, retired, reused, or promoted into a cleaner production-style engine.
+
 ## Limitations
 
-* This project is for research, replay, and discretionary live monitoring.
-* Signal outputs are not guaranteed trading recommendations.
-* Live behaviour depends on data quality, broker/server timestamps, spreads, slippage, session definitions, and market regime.
-* Adaptive Trend Health is a rule-based context layer and should be validated against historical and live observations before being used in decision-making.
-* Backtest and replay results may not match live trading exactly due to execution costs, latency, and changing market conditions.
+- This project is for research, replay, and discretionary live monitoring.
+- Signal outputs are not guaranteed trading recommendations.
+- Live behaviour depends on data quality, broker/server timestamps, spreads, slippage, session definitions, and market regime.
+- Adaptive Trend Health is a rule-based context layer and should be validated against historical and live observations before being used in decision-making.
+- Backtest and replay results may not match live trading exactly due to execution costs, latency, and changing market conditions.
+- Automated notebook results are historical simulations and depend on the selected dataset, spread assumptions, candle data quality, entry timing, and the fixed-point execution model.
+- The V5 modular engine is still a research notebook, not a production trading bot.
+- Runner-mode and exit-management tests should be interpreted separately from entry-quality tests.
+- Strong results on one historical regime do not guarantee robustness across future regimes.
+- The live MT5 overlay is discretionary decision support and does not automatically execute trades.
 
 
 ## Repository Structure
@@ -413,9 +679,11 @@ Adaptive Trend Health is intentionally configurable because the useful threshold
 ```text
 VWAP-probability-band-engine/
 ├── artifacts/
+│   ├── automated_vwap_v5_modular_engine/
 │   ├── logs/
 │   ├── metadata/
 │   ├── plots/
+│   ├── report_charts/
 │   └── tables/
 ├── data/
 │   ├── historical/
@@ -425,13 +693,20 @@ VWAP-probability-band-engine/
 │       ├── mt5-live-overlay-volume-spike.png
 │       └── mt5-full-bands-view.png
 ├── live_artifacts/
-│   ├── exports/
-│   ├── plots/
-│   └── states/
+├── docs/
+│   └── images/
 ├── notebooks/
+│   ├── automated_execution_research.ipynb
+│   ├── automated_vwap_v1.ipynb
+│   ├── automated_vwap_v2.ipynb
+│   ├── automated_vwap_v3.ipynb
+│   ├── automated_vwap_v4.ipynb
+│   ├── automated_vwap_v4_5.ipynb
+│   ├── automated_vwap_v5_modular_engine.ipynb
 │   ├── backtest_research.ipynb
-│   ├── replay_python.ipynb
-│   └── live_trading.ipynb
+│   ├── live_trading.ipynb
+│   ├── live_trading_double_overlay.ipynb
+│   └── replay_python.ipynb
 ├── src/
 │   ├── __init__.py
 │   ├── adaptive_trend_health.py
