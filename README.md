@@ -361,6 +361,114 @@ The V5 engine includes:
 - automatic experiment logging.
 
 The purpose of V5 is to act as the current research hub for the automated VWAP strategy. Earlier notebooks remain useful because they isolate individual ideas, but V5 is where the strongest combined version is currently being tested.
+## Current Research Snapshot: V5 Automated Engine
+
+This project is still under active research and tuning. The results below are not presented as final production performance claims. They are included as a transparent snapshot of the current V5 automated-engine research process, showing how signal filtering, runner exits, and risk diagnostics are evaluated across different market samples.
+
+The current snapshot uses the following configuration:
+
+**Base 2 — Safer Risk Version**  
+**Name:** Base + Delayed Pullback, S Clean-State 8/3 ON  
+**Purpose:** Risk-control candidate
+
+### Key Settings
+
+```text
+enable_a_tier_delayed_pullback_entry = True
+enable_a_tier_delayed_pullback_strength_filter = False
+
+enable_s_tier_clean_state_filter = True
+s_tier_green_failure_lookback_bars = 8
+s_tier_required_clean_closes_after_failure = 3
+
+enable_dynamic_s_tier_touch_diagnostics = True
+dynamic_s_tier_touch_mode = "tag_only"
+
+strategy_filter = "v4_dynamic_regime_selector"
+runner_mode = "always"
+runner_target = 5R
+
+red_shift_floors = OFF
+v2_trend_health = "router_gated"
+session_filter = OFF
+no_new_trades_after = "19:00"
+max_consecutive_sl = 2
+```
+
+### Summary Result
+
+On the main 1-year NY session sample, this safer V5 configuration produced:
+
+| Dataset | Trades | Total R | Avg R | Max Equity Drawdown | Positive Exit Rate |
+|---|---:|---:|---:|---:|---:|
+| US100_cash_M1_NY_session_1y | 108 | 81.21R | 0.752R | -7.17R | 60.19% |
+
+This version is designed as a safer drawdown-control candidate. It reduces risk meaningfully, but also blocks a number of high-quality S-tier runner opportunities, lowering total return compared with looser V5 configurations.
+
+The low direct target-TP rate should not be interpreted in isolation. V5 separates fixed target hits, full stop losses, breakeven/protected exits, and profitable runner trail-lock exits. Because runner exits are part of the engine design, the more important diagnostics are total R, average R per trade, full-SL rate, positive-exit rate, and max drawdown.
+
+### V5 Diagnostic Screenshots
+
+The screenshots below show the automated V5 notebook output for the current Base 2 safer-risk configuration.
+
+<details>
+<summary>View V5 Base 2 diagnostic screenshots</summary>
+
+#### Main Comparison Table
+
+![V5 Base 2 comparison table](docs/images/comparison_table_2_safe.PNG)
+
+#### Risk Diagnostics
+
+![V5 Base 2 risk diagnostics](docs/images/comparison_table_2_risk.PNG)
+
+</details>
+
+<details>
+<summary>Full V5 Base 2 comparison table</summary>
+
+| Dataset | Rows | Raw Signals | Final Signals | Trades | TP | SL_FULL | BE_FLAT | BE_PLUS | TRAILED_SL_PROFIT | TIME_EXIT | Target TP Rate | Full SL Rate | Positive Exit Rate | WR ex Flat BE | Non-Loss Rate | Total R | Avg R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| US100_cash_M1_NY_session_30d | 6,728 | 90 | 25 | 23 | 2 | 11 | 0 | 7 | 3 | 0 | 8.70% | 47.83% | 52.17% | 52.17% | 52.17% | 5.72R | 0.249R |
+| US100_cash_M1_NY_session_1y | 51,666 | 539 | 128 | 108 | 16 | 43 | 0 | 31 | 18 | 0 | 14.81% | 39.81% | 60.19% | 60.19% | 60.19% | 81.21R | 0.752R |
+| US100_cash_M1_NY_session_calm_2021_partial | 16,093 | 145 | 41 | 30 | 6 | 17 | 0 | 6 | 1 | 0 | 20.00% | 56.67% | 43.33% | 43.33% | 43.33% | 15.62R | 0.521R |
+| US100_cash_M1_NY_session_volatile_2022 | 51,568 | 535 | 131 | 109 | 10 | 55 | 0 | 32 | 12 | 0 | 9.17% | 50.46% | 49.54% | 49.54% | 49.54% | 28.31R | 0.260R |
+| US100_cash_M1_NY_session_ukraine_war_2022_2023 | 51,568 | 545 | 134 | 112 | 9 | 51 | 0 | 34 | 18 | 0 | 8.04% | 45.54% | 54.46% | 54.46% | 54.46% | 42.52R | 0.380R |
+| US100_cash_M1_NY_session_recent_2025_2026 | 51,666 | 583 | 142 | 115 | 19 | 48 | 0 | 31 | 17 | 0 | 16.52% | 41.74% | 58.26% | 58.26% | 58.26% | 89.21R | 0.776R |
+| US100_cash_M1_NY_session_2023_full | 51,584 | 504 | 119 | 92 | 11 | 47 | 0 | 20 | 14 | 0 | 11.96% | 51.09% | 48.91% | 48.91% | 48.91% | 45.07R | 0.490R |
+| US100_cash_M1_NY_session_2024_full | 51,800 | 452 | 92 | 81 | 7 | 45 | 0 | 17 | 12 | 0 | 8.64% | 55.56% | 44.44% | 44.44% | 44.44% | 22.76R | 0.281R |
+
+</details>
+
+<details>
+<summary>Full V5 Base 2 risk diagnostics</summary>
+
+| Dataset | Trades | Max Consecutive SL | Worst No-TP Run R | Max Equity Drawdown R | Worst No-TP Run % | Max Drawdown % |
+|---|---:|---:|---:|---:|---:|---:|
+| US100_cash_M1_NY_session_30d | 23 | 6 | -5.00R | -5.00R | -5.00% | -5.00% |
+| US100_cash_M1_NY_session_1y | 108 | 6 | -7.17R | -7.17R | -7.17% | -7.17% |
+| US100_cash_M1_NY_session_calm_2021_partial | 30 | 5 | -5.79R | -5.90R | -5.79% | -5.90% |
+| US100_cash_M1_NY_session_volatile_2022 | 109 | 6 | -8.28R | -8.48R | -8.28% | -8.48% |
+| US100_cash_M1_NY_session_ukraine_war_2022_2023 | 112 | 6 | -8.69R | -8.69R | -8.69% | -8.69% |
+| US100_cash_M1_NY_session_recent_2025_2026 | 115 | 6 | -8.17R | -8.17R | -8.17% | -8.17% |
+| US100_cash_M1_NY_session_2023_full | 92 | 7 | -7.00R | -7.00R | -7.00% | -7.00% |
+| US100_cash_M1_NY_session_2024_full | 81 | 10 | -8.69R | -8.69R | -8.69% | -8.69% |
+
+</details>
+
+### Current Interpretation
+
+This V5 Base 2 configuration is a strong risk-control candidate rather than the highest-return candidate.
+
+It shows:
+
+- improved drawdown control,
+- controlled max consecutive full-stop losses,
+- consistent positive expectancy across multiple market samples,
+- lower total return than looser versions due to stricter S-tier clean-state filtering,
+- and useful diagnostic separation between fixed TP, full SL, protected exits, and runner trail-lock exits.
+
+Current verdict: **Base 2 is useful as a conservative benchmark for future V5 presets, but not necessarily the final production configuration.**
 
 ## Notebook Workflow
 
