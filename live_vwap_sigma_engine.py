@@ -232,6 +232,7 @@ SETUP_PROFILES = {
 
         "use_candle_quality_filter": True,
         "use_extension_filter": True,
+        # "max_entry_extension_from_green_points": DEFAULT_MAX_GREEN_EXTENSION_POINTS,
         "max_entry_extension_from_green_points": 8.0,
         "use_clean_state_filter": True,
 
@@ -247,6 +248,7 @@ SETUP_PROFILES = {
 
         "use_candle_quality_filter": True,
         "use_extension_filter": True,
+        # "max_entry_extension_from_green_points": DEFAULT_MAX_GREEN_EXTENSION_POINTS,
         "max_entry_extension_from_green_points": 8.0,
         "use_clean_state_filter": True,
 
@@ -267,6 +269,7 @@ SETUP_PROFILES = {
         "use_candle_quality_filter": True,
         "use_extension_filter": True,
         "max_entry_extension_from_green_points": DEFAULT_MAX_GREEN_EXTENSION_POINTS,
+        # "max_entry_extension_from_green_points": 30.0,
         "use_clean_state_filter": False,
 
         "runner_target_r": 10.0,
@@ -282,6 +285,7 @@ SETUP_PROFILES = {
         "use_candle_quality_filter": True,
         "use_extension_filter": True,
         "max_entry_extension_from_green_points": DEFAULT_MAX_GREEN_EXTENSION_POINTS,
+        # "max_entry_extension_from_green_points": 30.0,
         "use_clean_state_filter": False,
 
         "runner_target_r": 10.0,
