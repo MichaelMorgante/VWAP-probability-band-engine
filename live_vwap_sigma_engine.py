@@ -1,17 +1,14 @@
 """
 VWAP Sigma Live Execution Engine
 
-Live/demo execution scaffold for the VWAP Sigma continuation strategy.
+Configurable live/demo execution engine for VWAP sigma-based trading logic.
 
-This file is intentionally built commit-by-commit from the research notebook.
-Commit 1 contains only:
-- editable top-level config
-- validation
-- logging helpers
-- signal/trade-state data structures
-- setup-specific runner-target resolution
-
-No MT5 connection or order placement is implemented in this commit.
+This script is designed to:
+- load live market context
+- evaluate VWAP sigma setup logic
+- apply configurable strategy and risk controls
+- support signal-only or automated execution modes
+- log signals, blocks, order attempts, fills, and position-management events
 """
 
 from __future__ import annotations
@@ -534,8 +531,7 @@ def main() -> None:
         message="Live continuation engine skeleton started. MT5 connection not implemented yet.",
     )
 
-    print("Commit 1 skeleton loaded successfully.")
-    print("Next commit will add optional MT5 import/connection helpers.")
+    print("skeleton loaded successfully.")
 
 
 if __name__ == "__main__":
