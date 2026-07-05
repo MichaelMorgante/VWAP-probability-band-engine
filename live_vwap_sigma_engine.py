@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,24 @@ NO_NEW_TRADES_AFTER = "19:00"
 USE_SESSION_FILTER = False
 SESSION_START = "14:30"
 SESSION_END = "21:00"
+
+# ============================================================
+# STARTUP / HISTORY CONFIG
+# ============================================================
+
+HISTORY_LOOKBACK_MINUTES = 200
+MIN_WARMUP_CANDLES = 120
+REQUIRE_FULL_LOOKBACK_BEFORE_TRADING = False
+
+
+# ============================================================
+# MARKET OPEN BLACKOUT CONFIG
+# ============================================================
+
+BLOCK_MARKET_OPEN_WINDOW = False
+MARKET_OPEN_TIME = "14:30"
+MARKET_OPEN_TIMEZONE = "Europe/London"
+MARKET_OPEN_BLOCK_MINUTES = 15
 
 
 # ============================================================
@@ -307,6 +326,15 @@ LOG_FIELDS = [
     "order_ticket",
     "position_ticket",
     "retcode",
+    "bot_start_time",
+    "candles_loaded",
+    "min_warmup_candles",
+    "history_lookback_minutes",
+    "require_full_lookback_before_trading",
+    "market_open_blackout_enabled",
+    "market_open_time",
+    "market_open_timezone",
+    "market_open_block_minutes",
     "message",
 ]
 
@@ -361,13 +389,11 @@ def log_event(event_type: str, **kwargs: Any) -> None:
     for key, value in kwargs.items():
         if key in row:
             row[key] = value
-        else:
-            row[key] = value
 
     file_exists = EVENT_LOG_PATH.exists()
 
     with EVENT_LOG_PATH.open("a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
@@ -412,6 +438,163 @@ def build_sl_tp(direction: str, entry_price: float) -> tuple[float, float]:
 
     return sl_price, tp_price
 
+def parse_hhmm_time(value: str, field_name: str) -> time:
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be in HH:MM format, got: {value}") from exc
+
+
+def get_timezone(timezone_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Invalid timezone: {timezone_name}") from exc
+
+
+def get_bot_start_time() -> datetime:
+    return datetime.now(get_timezone(TRADING_TIMEZONE))
+
+
+def to_timezone_aware_datetime(value: Any, timezone_name: str = TRADING_TIMEZONE) -> datetime:
+    timezone_obj = get_timezone(timezone_name)
+
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+
+    if isinstance(value, datetime):
+        dt_value = value
+    else:
+        dt_value = datetime.fromisoformat(str(value))
+
+    if dt_value.tzinfo is None:
+        return dt_value.replace(tzinfo=timezone_obj)
+
+    return dt_value.astimezone(timezone_obj)
+
+
+def has_enough_warmup(candles: Any) -> tuple[bool, str]:
+    usable_closed_count = len(candles)
+
+    if usable_closed_count < MIN_WARMUP_CANDLES:
+        return False, (
+            f"Warmup wait: {usable_closed_count} closed candles loaded, "
+            f"minimum required is {MIN_WARMUP_CANDLES}"
+        )
+
+    if REQUIRE_FULL_LOOKBACK_BEFORE_TRADING:
+        if usable_closed_count < HISTORY_LOOKBACK_MINUTES:
+            return False, (
+                f"Full lookback required: {usable_closed_count} closed candles loaded, "
+                f"required is {HISTORY_LOOKBACK_MINUTES}"
+            )
+
+    return True, f"Warmup passed: {usable_closed_count} closed candles loaded"
+
+
+def is_fresh_signal_after_startup(signal_time: Any, bot_start_time: datetime) -> bool:
+    signal_dt = to_timezone_aware_datetime(signal_time, TRADING_TIMEZONE)
+    start_dt = to_timezone_aware_datetime(bot_start_time, TRADING_TIMEZONE)
+
+    return signal_dt > start_dt
+
+
+def get_market_open_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+    timezone_obj = get_timezone(MARKET_OPEN_TIMEZONE)
+
+    if now is None:
+        now_dt = datetime.now(timezone_obj)
+    else:
+        now_dt = to_timezone_aware_datetime(now, MARKET_OPEN_TIMEZONE)
+
+    open_time = parse_hhmm_time(MARKET_OPEN_TIME, "MARKET_OPEN_TIME")
+
+    open_dt = datetime.combine(
+        now_dt.date(),
+        open_time,
+        tzinfo=timezone_obj,
+    )
+
+    close_dt = open_dt + timedelta(minutes=MARKET_OPEN_BLOCK_MINUTES)
+
+    return open_dt, close_dt
+
+
+def is_in_market_open_blackout(now: datetime | None = None) -> bool:
+    if not BLOCK_MARKET_OPEN_WINDOW:
+        return False
+
+    if MARKET_OPEN_BLOCK_MINUTES <= 0:
+        return False
+
+    timezone_obj = get_timezone(MARKET_OPEN_TIMEZONE)
+
+    if now is None:
+        now_dt = datetime.now(timezone_obj)
+    else:
+        now_dt = to_timezone_aware_datetime(now, MARKET_OPEN_TIMEZONE)
+
+    open_dt, close_dt = get_market_open_window(now_dt)
+
+    return open_dt <= now_dt < close_dt
+
+
+def should_allow_new_entry_after_startup_checks(
+    signal_time: Any,
+    bot_start_time: datetime,
+    candles: Any,
+    now: datetime | None = None,
+) -> tuple[bool, str]:
+    candles_loaded = len(candles)
+
+    warmup_ok, warmup_message = has_enough_warmup(candles)
+
+    if not warmup_ok:
+        log_event(
+            "WARMUP_WAIT",
+            signal_time=signal_time,
+            bot_start_time=bot_start_time.isoformat(),
+            candles_loaded=candles_loaded,
+            min_warmup_candles=MIN_WARMUP_CANDLES,
+            history_lookback_minutes=HISTORY_LOOKBACK_MINUTES,
+            require_full_lookback_before_trading=REQUIRE_FULL_LOOKBACK_BEFORE_TRADING,
+            block_reason=warmup_message,
+            message=warmup_message,
+        )
+        return False, warmup_message
+
+    if not is_fresh_signal_after_startup(signal_time, bot_start_time):
+        block_reason = "Signal is from before bot startup"
+
+        log_event(
+            "SIGNAL_BLOCKED",
+            signal_time=signal_time,
+            bot_start_time=bot_start_time.isoformat(),
+            candles_loaded=candles_loaded,
+            block_reason=block_reason,
+            message=block_reason,
+        )
+        return False, block_reason
+
+    if is_in_market_open_blackout(now):
+        block_reason = "Market open blackout window"
+
+        log_event(
+            "SIGNAL_BLOCKED",
+            signal_time=signal_time,
+            bot_start_time=bot_start_time.isoformat(),
+            candles_loaded=candles_loaded,
+            block_reason=block_reason,
+            market_open_blackout_enabled=BLOCK_MARKET_OPEN_WINDOW,
+            market_open_time=MARKET_OPEN_TIME,
+            market_open_timezone=MARKET_OPEN_TIMEZONE,
+            market_open_block_minutes=MARKET_OPEN_BLOCK_MINUTES,
+            message=block_reason,
+        )
+        return False, block_reason
+
+    return True, "Startup/new-entry safety checks passed"
+
 
 def validate_config() -> None:
     valid_execution_modes = {"signal_only", "place_orders"}
@@ -446,6 +629,25 @@ def validate_config() -> None:
 
     if MAX_OPEN_CONTINUATION_TRADES <= 0:
         raise ValueError("MAX_OPEN_CONTINUATION_TRADES must be > 0")
+    
+    if HISTORY_LOOKBACK_MINUTES <= 0:
+        raise ValueError("HISTORY_LOOKBACK_MINUTES must be > 0")
+
+    if MIN_WARMUP_CANDLES <= 0:
+        raise ValueError("MIN_WARMUP_CANDLES must be > 0")
+
+    if MARKET_OPEN_BLOCK_MINUTES < 0:
+        raise ValueError("MARKET_OPEN_BLOCK_MINUTES must be >= 0")
+
+    parse_hhmm_time(MARKET_OPEN_TIME, "MARKET_OPEN_TIME")
+    get_timezone(TRADING_TIMEZONE)
+    get_timezone(MARKET_OPEN_TIMEZONE)
+
+    if MIN_WARMUP_CANDLES > HISTORY_LOOKBACK_MINUTES:
+        print("")
+        print("WARNING: MIN_WARMUP_CANDLES is greater than HISTORY_LOOKBACK_MINUTES.")
+        print("This may be intended, but it means the bot may wait longer than the requested history lookback.")
+        print("")
 
     for setup_family, profile in SETUP_PROFILES.items():
         runner_target = profile.get("runner_target_r")
@@ -491,6 +693,16 @@ def print_startup_config() -> None:
     print(f"- Max daily loss R: {MAX_DAILY_LOSS_R}")
     print(f"- Max consecutive SL: {MAX_CONSECUTIVE_SL}")
     print(f"- No new trades after: {NO_NEW_TRADES_AFTER} {TRADING_TIMEZONE}")
+    print(f"- History lookback minutes: {HISTORY_LOOKBACK_MINUTES}")
+    print(f"- Minimum warmup candles: {MIN_WARMUP_CANDLES}")
+    print(
+        "- Require full lookback before trading: "
+        f"{REQUIRE_FULL_LOOKBACK_BEFORE_TRADING}"
+    )
+    print(f"- Block market open window: {BLOCK_MARKET_OPEN_WINDOW}")
+    print(f"- Market open time: {MARKET_OPEN_TIME}")
+    print(f"- Market open timezone: {MARKET_OPEN_TIMEZONE}")
+    print(f"- Market open block minutes: {MARKET_OPEN_BLOCK_MINUTES}")
 
     a_tier_bypass = ROUTER_BYPASS_RULES["A_TIER"]
 
@@ -524,14 +736,22 @@ def print_startup_config() -> None:
 
 def main() -> None:
     validate_config()
+    bot_start_time = get_bot_start_time()
+
     print_startup_config()
 
     log_event(
         "HEARTBEAT",
-        message="Live continuation engine skeleton started. MT5 connection not implemented yet.",
+        bot_start_time=bot_start_time.isoformat(),
+        history_lookback_minutes=HISTORY_LOOKBACK_MINUTES,
+        min_warmup_candles=MIN_WARMUP_CANDLES,
+        require_full_lookback_before_trading=REQUIRE_FULL_LOOKBACK_BEFORE_TRADING,
+        market_open_blackout_enabled=BLOCK_MARKET_OPEN_WINDOW,
+        market_open_time=MARKET_OPEN_TIME,
+        market_open_timezone=MARKET_OPEN_TIMEZONE,
+        market_open_block_minutes=MARKET_OPEN_BLOCK_MINUTES,
+        message="Live continuation engine skeleton started. Startup/lookback controls loaded. MT5 connection not implemented yet.",
     )
-
-    print("skeleton loaded successfully.")
 
 
 if __name__ == "__main__":
