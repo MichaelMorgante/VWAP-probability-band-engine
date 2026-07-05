@@ -1,5 +1,5 @@
 """
-VWAP Sigma Continuation Live Engine
+VWAP Sigma Live Execution Engine
 
 Live/demo execution scaffold for the VWAP Sigma continuation strategy.
 
@@ -290,7 +290,7 @@ SETUP_PROFILES = {
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
-EVENT_LOG_PATH = LOG_DIR / "live_continuation_events.csv"
+EVENT_LOG_PATH = LOG_DIR / "live_vwap_sigma_events.csv"
 
 LOG_FIELDS = [
     "timestamp",
@@ -476,7 +476,7 @@ def validate_config() -> None:
 
 def print_startup_config() -> None:
     print("")
-    print("VWAP Sigma Continuation Live Engine")
+    print("VWAP Sigma Live Execution Engine")
     print("")
     print(f"- Symbol: {SYMBOL}")
     print(f"- Timeframe: {TIMEFRAME}")
