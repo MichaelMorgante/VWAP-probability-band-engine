@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import importlib
+import json
 import sys
 import time as time_module
 from dataclasses import dataclass, asdict
@@ -516,6 +517,7 @@ LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
 EVENT_LOG_PATH = LOG_DIR / "live_vwap_sigma_events.csv"
+TRADE_STATE_LOG_PATH = LOG_DIR / "live_vwap_sigma_trade_states.jsonl"
 
 LOG_FIELDS = [
     "timestamp",
@@ -624,6 +626,13 @@ LOG_FIELDS = [
     "router_bypass_reason",
     "router_bypass_setup_family",
     "router_bypass_trend_health_mode",
+    "trade_state_action",
+    "trade_state_ticket",
+    "trade_state_setup_family",
+    "trade_state_direction",
+    "trade_state_trail_state",
+    "trade_state_source",
+    "trade_state_open_count",
     "message",
 ]
 
@@ -705,6 +714,8 @@ daily_realised_r = 0.0
 consecutive_sl_count = 0
 daily_lockout_active = False
 max_consecutive_sl_lockout_active = False
+
+live_trade_states: dict[int, LiveTradeState] = {}
 
 
 # ============================================================
@@ -3612,10 +3623,16 @@ def get_open_bot_positions() -> list[Any]:
         if getattr(position, "magic", None) == MAGIC_NUMBER
     ]
 
+    sync_live_trade_states_from_positions(
+        positions=bot_positions,
+        source="mt5_position_sync",
+    )
+
     log_event(
         "HEARTBEAT",
         open_positions_count=len(bot_positions),
         positions_source="mt5",
+        trade_state_open_count=len(live_trade_states),
         message=f"Open bot positions detected: {len(bot_positions)}",
     )
 
@@ -3648,6 +3665,195 @@ def is_position_protected(position: Any) -> bool:
         return position_sl <= position_entry
 
     return False
+
+# ============================================================
+# LIVE TRADE-STATE REGISTRY
+# ============================================================
+
+def position_ticket_value(position: Any) -> int | None:
+    ticket = getattr(position, "ticket", None)
+
+    if ticket in (None, ""):
+        return None
+
+    try:
+        return int(ticket)
+    except (TypeError, ValueError):
+        return None
+
+
+def position_direction_label(position: Any) -> str:
+    position_type = getattr(position, "type", None)
+
+    if mt5 is not None:
+        if position_type == mt5.POSITION_TYPE_BUY:
+            return "BUY"
+
+        if position_type == mt5.POSITION_TYPE_SELL:
+            return "SELL"
+
+    return "UNKNOWN"
+
+
+def append_trade_state_record(
+    action: str,
+    state: LiveTradeState,
+    source: str,
+) -> None:
+    record = asdict(state)
+    record.update(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": action,
+            "source": source,
+            "symbol": SYMBOL,
+            "magic_number": MAGIC_NUMBER,
+        }
+    )
+
+    with TRADE_STATE_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+
+
+def log_trade_state_event(
+    action: str,
+    state: LiveTradeState,
+    source: str,
+    message: str,
+) -> None:
+    log_event(
+        "TRADE_STATE",
+        signal_time=state.signal_time,
+        direction=state.direction,
+        setup_family=state.setup_family,
+        entry_price=state.entry_price,
+        sl_price=state.sl_price,
+        tp_price=state.tp_price,
+        runner_target_r=state.runner_target_r,
+        runner_target_points=state.runner_target_points,
+        position_ticket=state.ticket,
+        trade_state_action=action,
+        trade_state_ticket=state.ticket,
+        trade_state_setup_family=state.setup_family,
+        trade_state_direction=state.direction,
+        trade_state_trail_state=state.trail_state,
+        trade_state_source=source,
+        trade_state_open_count=len(live_trade_states),
+        message=message,
+    )
+
+
+def register_live_trade_state(
+    state: LiveTradeState,
+    action: str,
+    source: str,
+) -> LiveTradeState:
+    live_trade_states[int(state.ticket)] = state
+
+    append_trade_state_record(
+        action=action,
+        state=state,
+        source=source,
+    )
+
+    log_trade_state_event(
+        action=action,
+        state=state,
+        source=source,
+        message=f"Live trade state {action}: ticket={state.ticket}",
+    )
+
+    return state
+
+
+def register_live_trade_state_from_fill(
+    position: Any,
+    signal: TradeSignal,
+) -> LiveTradeState | None:
+    ticket = position_ticket_value(position)
+
+    if ticket is None:
+        log_event(
+            "CRITICAL",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            message="Could not register trade state because position ticket is missing",
+        )
+        return None
+
+    state = LiveTradeState(
+        ticket=ticket,
+        setup_family=signal.setup_family,
+        direction=signal.direction,
+        entry_price=float(getattr(position, "price_open", signal.entry_price) or signal.entry_price),
+        sl_price=float(getattr(position, "sl", signal.sl_price) or signal.sl_price),
+        tp_price=float(getattr(position, "tp", signal.tp_price) or signal.tp_price),
+        runner_target_r=float(signal.runner_target_r),
+        runner_target_points=float(signal.runner_target_points),
+        signal_time=signal.signal_time,
+        trail_state="OPEN",
+    )
+
+    return register_live_trade_state(
+        state=state,
+        action="registered_from_fill",
+        source="order_fill",
+    )
+
+
+def recover_live_trade_state_from_position(
+    position: Any,
+    source: str = "mt5_position_sync",
+) -> LiveTradeState | None:
+    ticket = position_ticket_value(position)
+
+    if ticket is None:
+        return None
+
+    if ticket in live_trade_states:
+        return live_trade_states[ticket]
+
+    direction = position_direction_label(position)
+
+    state = LiveTradeState(
+        ticket=ticket,
+        setup_family="UNKNOWN",
+        direction=direction,
+        entry_price=float(getattr(position, "price_open", 0.0) or 0.0),
+        sl_price=float(getattr(position, "sl", 0.0) or 0.0),
+        tp_price=float(getattr(position, "tp", 0.0) or 0.0),
+        runner_target_r=float(RUNNER_TARGET_R),
+        runner_target_points=float(RUNNER_TARGET_R) * float(SL_POINTS),
+        signal_time="recovered_from_mt5",
+        trail_state="RECOVERED",
+    )
+
+    return register_live_trade_state(
+        state=state,
+        action="recovered_from_mt5",
+        source=source,
+    )
+
+
+def sync_live_trade_states_from_positions(
+    positions: list[Any],
+    source: str = "mt5_position_sync",
+) -> None:
+    for position in positions:
+        recover_live_trade_state_from_position(
+            position=position,
+            source=source,
+        )
+
+
+def get_live_trade_state_for_position(position: Any) -> LiveTradeState | None:
+    ticket = position_ticket_value(position)
+
+    if ticket is None:
+        return None
+
+    return live_trade_states.get(ticket)
 
 # ============================================================
 # ORDER EXECUTION HELPERS
@@ -4026,6 +4232,11 @@ def place_trade(signal: TradeSignal) -> Any | None:
         return result
 
     verify_filled_position_has_sl_tp(filled_position, signal)
+
+    register_live_trade_state_from_fill(
+        position=filled_position,
+        signal=signal,
+    )
 
     return result
 
@@ -4448,6 +4659,8 @@ def print_startup_config() -> None:
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
+    print(f"- Event log path: {EVENT_LOG_PATH}")
+    print(f"- Trade state log path: {TRADE_STATE_LOG_PATH}")
     print(f"- Run live loop on startup: {RUN_LIVE_LOOP_ON_STARTUP}")
     print(f"- Poll seconds: {POLL_SECONDS}")
     print(f"- Candle confirmation delay seconds: {CANDLE_CONFIRMATION_DELAY_SECONDS}")
