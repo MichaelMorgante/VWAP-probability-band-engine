@@ -149,6 +149,89 @@ TIMEFRAME_SECONDS = {
 }
 
 # ============================================================
+# LIVE STRATEGY FEATURE CONFIG
+# ============================================================
+
+AUTOMATION_FEATURE_CONFIG = {
+    # Feature lookbacks
+    "shift_lookback": 3,
+    "acceptance_lookback": 3,
+    "trend_lane_lookback": 5,
+    "trend_damage_lookback": 5,
+    "compression_lookback": 5,
+    "flat_vwap_lookback": 5,
+    "vwap_cross_lookback": 8,
+
+    # Chop / compression settings
+    "flat_vwap_threshold_points": 3.0,
+    "min_band_expansion_points": 0.0,
+    "max_vwap_crosses_before_chop": 2,
+
+    # Red-band shift strength buckets
+    "red_shift_minimum_points": 2.5,
+    "red_shift_good_points": 5.0,
+    "red_shift_strong_points": 7.0,
+    "red_shift_very_strong_points": 10.0,
+    "red_shift_extreme_points": 15.0,
+    "red_shift_very_extreme_points": 25.0,
+    "red_shift_abnormal_points": 30.0,
+
+    # V4 regime context
+    "v4_realised_range_lookback": 20,
+    "v4_min_realised_range_periods": 10,
+    "v4_high_realised_range_ratio": 1.25,
+    "v4_extreme_realised_range_ratio": 2.00,
+    "v4_vwap_slope_lookback": 10,
+    "v4_flat_vwap_threshold_points": 3.0,
+    "v4_band_width_lookback": 20,
+    "v4_min_band_width_periods": 10,
+    "v4_wide_band_width_ratio": 1.20,
+    "v4_band_expansion_lookback": 5,
+    "v4_min_band_expansion_points": 0.0,
+    "v4_vwap_cross_lookback": 12,
+    "v4_max_vwap_crosses_for_trend": 2,
+    "v4_recent_extreme_lookback": 5,
+
+    # Conditional V2 trend-health context
+    "v4_use_conditional_v2_trend_health_layer": True,
+    "v4_conditional_v2_min_recent_vwap_crosses": 2,
+    "v4_conditional_v2_extreme_range_ratio": 1.60,
+    "v4_conditional_v2_min_directional_red_shift_points": 5.0,
+
+    # Adaptive trend-health helper settings
+    "v2_trend_health_lookback": 5,
+    "v2_min_trend_health_periods": 3,
+    "v2_min_red_shift_relative_to_average": 0.70,
+    "v2_min_band_spread_change_points": 0.0,
+    "v2_min_opposite_band_expansion_points": 0.0,
+    "v2_trend_dead_bad_candles": 5,
+
+    # Reclaim / recovery state settings
+    "v2_reclaim_recovery_lookback": 20,
+    "v2_reclaim_acceptance_lookback": 6,
+    "v2_min_reclaim_above_green_ratio": 0.65,
+    "v2_min_reclaim_consecutive_green_closes": 2,
+    "v2_min_pullback_green_damage_count": 3,
+    "v2_vwap_slope_lookback": 5,
+    "v2_flat_vwap_slope_points": 1.5,
+
+    # Red-shift relative context
+    "v5_red_shift_relative_lookback_bars": 20,
+    "v5_red_shift_upgrade_ratio": 1.50,
+    "v5_red_shift_downgrade_ratio": 0.75,
+
+    # Second-close helper settings
+    "v3_green_reentry_lookback": 4,
+    "v3_trend_dead_bad_candles": 5,
+    "v3_min_directional_red_shift_points": 5.0,
+    "v3_band_spread_lookback": 1,
+
+    # Candle quality
+    "min_body_ratio": 0.25,
+    "min_close_through_green": 1.0,
+}
+
+# ============================================================
 # CORE STRATEGY CONFIG
 # ============================================================
 
@@ -449,6 +532,11 @@ LOG_FIELDS = [
     "feature_rows",
     "latest_feature_time",
     "missing_feature_columns",
+    "automation_feature_rows",
+    "latest_automation_time",
+    "latest_regime_label",
+    "latest_long_trend_health",
+    "latest_short_trend_health",
     "message",
 ]
 
@@ -1034,11 +1122,120 @@ def import_src_feature_engine() -> dict[str, Any]:
         return {}
 
 
+def setup_profile_bool_setting(
+    setup_family: str,
+    field_name: str,
+    fallback: bool,
+) -> bool:
+    profile = SETUP_PROFILES.get(setup_family, {})
+    return bool(profile.get(field_name, fallback))
+
+
+def setup_profile_max_green_extension_points(setup_family: str) -> float | None:
+    profile = SETUP_PROFILES.get(setup_family, {})
+    value = profile.get(
+        "max_entry_extension_from_green_points",
+        DEFAULT_MAX_GREEN_EXTENSION_POINTS,
+    )
+
+    if value is None:
+        return None
+
+    return float(value)
+
+
 def build_live_engine_config() -> dict[str, Any]:
     src_engine = import_src_feature_engine()
     engine_config = dict(src_engine.get("engine_config", {}))
 
-    engine_config["session_timezone"] = TRADING_TIMEZONE
+    engine_config.update(AUTOMATION_FEATURE_CONFIG)
+
+    engine_config.update(
+        {
+            "session_timezone": TRADING_TIMEZONE,
+            "no_new_trades_after": NO_NEW_TRADES_AFTER,
+
+            "use_candle_quality_filter": USE_CANDLE_QUALITY_FILTER,
+            "use_extension_filter": USE_GREEN_EXTENSION_FILTER,
+            "use_green_extension_filter": USE_GREEN_EXTENSION_FILTER,
+
+            "max_extension_from_green": setup_profile_max_green_extension_points(
+                "S_TIER"
+            ),
+
+            "v3_a_tier_max_extension_from_green": setup_profile_max_green_extension_points(
+                "A_TIER"
+            ),
+
+            "s_tier_use_extension_filter": (
+                USE_GREEN_EXTENSION_FILTER
+                and setup_profile_bool_setting(
+                    "S_TIER",
+                    "use_extension_filter",
+                    True,
+                )
+            ),
+            "dynamic_s_tier_use_extension_filter": (
+                USE_GREEN_EXTENSION_FILTER
+                and setup_profile_bool_setting(
+                    "DYNAMIC_S_TIER",
+                    "use_extension_filter",
+                    True,
+                )
+            ),
+            "a_tier_use_extension_filter": (
+                USE_GREEN_EXTENSION_FILTER
+                and setup_profile_bool_setting(
+                    "A_TIER",
+                    "use_extension_filter",
+                    True,
+                )
+            ),
+            "delayed_pullback_use_extension_filter": (
+                USE_GREEN_EXTENSION_FILTER
+                and setup_profile_bool_setting(
+                    "DELAYED_PULLBACK",
+                    "use_extension_filter",
+                    True,
+                )
+            ),
+
+            "s_tier_max_entry_extension_from_green_points": setup_profile_max_green_extension_points(
+                "S_TIER"
+            ),
+            "dynamic_s_tier_max_entry_extension_from_green_points": setup_profile_max_green_extension_points(
+                "DYNAMIC_S_TIER"
+            ),
+            "a_tier_max_entry_extension_from_green_points": setup_profile_max_green_extension_points(
+                "A_TIER"
+            ),
+            "delayed_pullback_max_entry_extension_from_green_points": setup_profile_max_green_extension_points(
+                "DELAYED_PULLBACK"
+            ),
+
+            "enable_v2_trend_health_filter": USE_TREND_HEALTH_FILTER,
+            "s_tier_use_trend_health": setup_profile_bool_setting(
+                "S_TIER",
+                "use_trend_health",
+                False,
+            ),
+            "dynamic_s_tier_use_trend_health": setup_profile_bool_setting(
+                "DYNAMIC_S_TIER",
+                "use_trend_health",
+                False,
+            ),
+            "a_tier_use_trend_health": setup_profile_bool_setting(
+                "A_TIER",
+                "use_trend_health",
+                True,
+            ),
+            "delayed_pullback_use_trend_health": setup_profile_bool_setting(
+                "DELAYED_PULLBACK",
+                "use_trend_health",
+                True,
+            ),
+        }
+    )
 
     return engine_config
 
@@ -1088,6 +1285,737 @@ def validate_engine_output_columns(df: pd.DataFrame) -> None:
             "Missing required VWAP feature output columns: "
             + ", ".join(missing)
         )
+    
+REQUIRED_AUTOMATION_FEATURE_COLUMNS = [
+    "bullish_red_shift_strength",
+    "bearish_red_shift_strength",
+    "bullish_red_shift_label",
+    "bearish_red_shift_label",
+    "accepted_above_vwap",
+    "accepted_below_vwap",
+    "v2_long_trend_health_pass",
+    "v2_short_trend_health_pass",
+    "v3_long_directional_red_shift_pass",
+    "v3_short_directional_red_shift_pass",
+    "long_extension_from_green_points",
+    "short_extension_from_green_points",
+    "v4_preliminary_regime_label",
+    "v5_regime_20m",
+]
+
+
+RED_SHIFT_BUCKET_ORDER = [
+    "weak",
+    "minimum",
+    "good",
+    "strong",
+    "very_strong",
+    "extreme",
+    "very_extreme",
+    "abnormal_news",
+]
+
+
+def consecutive_true_count(condition: pd.Series) -> pd.Series:
+    condition = condition.fillna(False).astype(bool)
+
+    counts = []
+    current_count = 0
+
+    for value in condition:
+        if value:
+            current_count += 1
+        else:
+            current_count = 0
+
+        counts.append(current_count)
+
+    return pd.Series(counts, index=condition.index)
+
+
+def classify_red_shift_strength(value: float, config: dict[str, Any]) -> str:
+    if pd.isna(value):
+        return "unknown"
+
+    if value < config["red_shift_minimum_points"]:
+        return "weak"
+
+    if value < config["red_shift_good_points"]:
+        return "minimum"
+
+    if value < config["red_shift_strong_points"]:
+        return "good"
+
+    if value < config["red_shift_very_strong_points"]:
+        return "strong"
+
+    if value < config["red_shift_extreme_points"]:
+        return "very_strong"
+
+    if value < config["red_shift_very_extreme_points"]:
+        return "extreme"
+
+    if value < config["red_shift_abnormal_points"]:
+        return "very_extreme"
+
+    return "abnormal_news"
+
+
+def adjust_red_shift_bucket_by_relative_strength(
+    bucket: str,
+    shift_ratio: float,
+    config: dict[str, Any],
+) -> str:
+    if bucket not in RED_SHIFT_BUCKET_ORDER:
+        return bucket
+
+    if pd.isna(shift_ratio):
+        return bucket
+
+    bucket_index = RED_SHIFT_BUCKET_ORDER.index(bucket)
+
+    if shift_ratio >= config.get("v5_red_shift_upgrade_ratio", 1.50):
+        bucket_index = min(bucket_index + 1, len(RED_SHIFT_BUCKET_ORDER) - 1)
+
+    elif shift_ratio <= config.get("v5_red_shift_downgrade_ratio", 0.75):
+        bucket_index = max(bucket_index - 1, 0)
+
+    return RED_SHIFT_BUCKET_ORDER[bucket_index]
+
+
+def classify_red_shift_strength_with_relative_context(
+    value: float,
+    shift_ratio: float,
+    config: dict[str, Any],
+) -> str:
+    absolute_bucket = classify_red_shift_strength(value, config)
+
+    return adjust_red_shift_bucket_by_relative_strength(
+        bucket=absolute_bucket,
+        shift_ratio=shift_ratio,
+        config=config,
+    )
+
+
+def validate_automation_feature_columns(df: pd.DataFrame) -> None:
+    missing = [
+        column
+        for column in REQUIRED_AUTOMATION_FEATURE_COLUMNS
+        if column not in df.columns
+    ]
+
+    if missing:
+        log_event(
+            "ERROR",
+            missing_feature_columns=", ".join(missing),
+            message="Missing required automation feature columns",
+        )
+
+        raise ValueError(
+            "Missing required automation feature columns: "
+            + ", ".join(missing)
+        )
+
+
+def add_live_automation_features(
+    df: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    out = df.copy().sort_values("datetime").reset_index(drop=True)
+
+    shift_lookback = int(config["shift_lookback"])
+    acceptance_lookback = int(config["acceptance_lookback"])
+    compression_lookback = int(config["compression_lookback"])
+    flat_vwap_lookback = int(config["flat_vwap_lookback"])
+    vwap_cross_lookback = int(config["vwap_cross_lookback"])
+
+    shift_columns = [
+        "vwap",
+        "upper_green",
+        "upper_orange",
+        "upper_red",
+        "lower_green",
+        "lower_orange",
+        "lower_red",
+    ]
+
+    for column in shift_columns:
+        out[f"{column}_shift"] = out[column] - out[column].shift(shift_lookback)
+
+    out["bullish_red_shift_strength"] = out["upper_red_shift"]
+    out["bearish_red_shift_strength"] = -out["lower_red_shift"]
+
+    out["bullish_red_shift_label"] = out["bullish_red_shift_strength"].apply(
+        lambda value: classify_red_shift_strength(value, config)
+    )
+    out["bearish_red_shift_label"] = out["bearish_red_shift_strength"].apply(
+        lambda value: classify_red_shift_strength(value, config)
+    )
+
+    out["green_band_width"] = out["upper_green"] - out["lower_green"]
+    out["orange_band_width"] = out["upper_orange"] - out["lower_orange"]
+    out["red_band_width"] = out["upper_red"] - out["lower_red"]
+
+    out["red_band_width_change"] = (
+        out["red_band_width"] - out["red_band_width"].shift(compression_lookback)
+    )
+
+    out["bands_expanding"] = (
+        out["red_band_width_change"] > config["min_band_expansion_points"]
+    )
+    out["bands_compressing"] = out["red_band_width_change"] < 0
+
+    out["close_above_vwap"] = out["close"] > out["vwap"]
+    out["close_below_vwap"] = out["close"] < out["vwap"]
+
+    out["closes_above_vwap_count"] = (
+        out["close_above_vwap"]
+        .astype(int)
+        .rolling(acceptance_lookback, min_periods=1)
+        .sum()
+    )
+
+    out["closes_below_vwap_count"] = (
+        out["close_below_vwap"]
+        .astype(int)
+        .rolling(acceptance_lookback, min_periods=1)
+        .sum()
+    )
+
+    out["accepted_above_vwap"] = out["closes_above_vwap_count"] >= 2
+    out["accepted_below_vwap"] = out["closes_below_vwap_count"] >= 2
+
+    out["v2_long_vwap_acceptance_pass"] = (
+        out["accepted_above_vwap"] & (out["close"] > out["vwap"])
+    )
+    out["v2_short_vwap_acceptance_pass"] = (
+        out["accepted_below_vwap"] & (out["close"] < out["vwap"])
+    )
+
+    out["v2_last_upper_red_shift"] = out["upper_red"] - out["upper_red"].shift(1)
+    out["v2_last_lower_red_shift"] = out["lower_red"].shift(1) - out["lower_red"]
+
+    out["v2_long_directional_red_shift"] = out["v2_last_upper_red_shift"]
+    out["v2_short_directional_red_shift"] = out["v2_last_lower_red_shift"]
+
+    trend_health_lookback = int(config["v2_trend_health_lookback"])
+    min_trend_health_periods = int(config["v2_min_trend_health_periods"])
+
+    out["v2_long_recent_avg_red_shift"] = (
+        out["v2_long_directional_red_shift"]
+        .clip(lower=0)
+        .rolling(trend_health_lookback, min_periods=min_trend_health_periods)
+        .mean()
+        .shift(1)
+    )
+
+    out["v2_short_recent_avg_red_shift"] = (
+        out["v2_short_directional_red_shift"]
+        .clip(lower=0)
+        .rolling(trend_health_lookback, min_periods=min_trend_health_periods)
+        .mean()
+        .shift(1)
+    )
+
+    out["v2_long_red_shift_relative_to_avg"] = np.where(
+        out["v2_long_recent_avg_red_shift"] > 0,
+        out["v2_long_directional_red_shift"] / out["v2_long_recent_avg_red_shift"],
+        np.nan,
+    )
+
+    out["v2_short_red_shift_relative_to_avg"] = np.where(
+        out["v2_short_recent_avg_red_shift"] > 0,
+        out["v2_short_directional_red_shift"] / out["v2_short_recent_avg_red_shift"],
+        np.nan,
+    )
+
+    out["v2_long_red_shift_adaptive_pass"] = (
+        (out["v2_long_directional_red_shift"] > 0)
+        & (
+            out["v2_long_red_shift_relative_to_avg"]
+            >= config["v2_min_red_shift_relative_to_average"]
+        )
+    )
+
+    out["v2_short_red_shift_adaptive_pass"] = (
+        (out["v2_short_directional_red_shift"] > 0)
+        & (
+            out["v2_short_red_shift_relative_to_avg"]
+            >= config["v2_min_red_shift_relative_to_average"]
+        )
+    )
+
+    out["v2_red_band_width_change_window"] = (
+        out["red_band_width"] - out["red_band_width"].shift(trend_health_lookback)
+    )
+
+    out["v2_bands_not_compressing"] = (
+        out["v2_red_band_width_change_window"]
+        >= config["v2_min_band_spread_change_points"]
+    )
+
+    out["v2_long_opposite_band_expansion"] = (
+        out["lower_red"].shift(1) - out["lower_red"]
+    )
+    out["v2_short_opposite_band_expansion"] = (
+        out["upper_red"] - out["upper_red"].shift(1)
+    )
+
+    out["v2_long_opposite_band_expansion_pass"] = (
+        out["v2_long_opposite_band_expansion"]
+        >= config["v2_min_opposite_band_expansion_points"]
+    )
+
+    out["v2_short_opposite_band_expansion_pass"] = (
+        out["v2_short_opposite_band_expansion"]
+        >= config["v2_min_opposite_band_expansion_points"]
+    )
+
+    out["v2_long_bad_green_close"] = out["close"] < out["upper_green"]
+    out["v2_short_bad_green_close"] = out["close"] > out["lower_green"]
+
+    out["v2_long_bad_green_close_count"] = consecutive_true_count(
+        out["v2_long_bad_green_close"]
+    )
+    out["v2_short_bad_green_close_count"] = consecutive_true_count(
+        out["v2_short_bad_green_close"]
+    )
+
+    out["v2_long_trend_dead"] = (
+        out["v2_long_bad_green_close_count"]
+        >= config["v2_trend_dead_bad_candles"]
+    )
+    out["v2_short_trend_dead"] = (
+        out["v2_short_bad_green_close_count"]
+        >= config["v2_trend_dead_bad_candles"]
+    )
+
+    out["v2_long_trend_health_pass"] = (
+        out["v2_long_vwap_acceptance_pass"]
+        & out["v2_long_red_shift_adaptive_pass"]
+        & out["v2_bands_not_compressing"]
+        & out["v2_long_opposite_band_expansion_pass"]
+        & ~out["v2_long_trend_dead"]
+    )
+
+    out["v2_short_trend_health_pass"] = (
+        out["v2_short_vwap_acceptance_pass"]
+        & out["v2_short_red_shift_adaptive_pass"]
+        & out["v2_bands_not_compressing"]
+        & out["v2_short_opposite_band_expansion_pass"]
+        & ~out["v2_short_trend_dead"]
+    )
+
+    out["v2_long_continuation_health_pass"] = out["v2_long_trend_health_pass"]
+    out["v2_short_continuation_health_pass"] = out["v2_short_trend_health_pass"]
+
+    out["v3_long_directional_red_shift"] = (
+        out["upper_red"] - out["upper_red"].shift(1)
+    )
+    out["v3_short_directional_red_shift"] = (
+        out["lower_red"].shift(1) - out["lower_red"]
+    )
+
+    out["v3_long_red_shift_bucket"] = out["v3_long_directional_red_shift"].apply(
+        lambda value: classify_red_shift_strength(value, config)
+    )
+    out["v3_short_red_shift_bucket"] = out["v3_short_directional_red_shift"].apply(
+        lambda value: classify_red_shift_strength(value, config)
+    )
+
+    out["v3_long_directional_red_shift_pass"] = (
+        out["v3_long_directional_red_shift"]
+        >= config["v3_min_directional_red_shift_points"]
+    )
+    out["v3_short_directional_red_shift_pass"] = (
+        out["v3_short_directional_red_shift"]
+        >= config["v3_min_directional_red_shift_points"]
+    )
+
+    out["v3_long_vwap_acceptance_pass"] = out["v2_long_vwap_acceptance_pass"]
+    out["v3_short_vwap_acceptance_pass"] = out["v2_short_vwap_acceptance_pass"]
+
+    out["v3_long_trend_dead"] = out["v2_long_trend_dead"]
+    out["v3_short_trend_dead"] = out["v2_short_trend_dead"]
+
+    out["v3_red_bands_spreading"] = (
+        out["red_band_width"] - out["red_band_width"].shift(
+            int(config["v3_band_spread_lookback"])
+        )
+    ) > 0
+
+    out["vwap_side"] = np.where(
+        out["close"] > out["vwap"],
+        1,
+        np.where(out["close"] < out["vwap"], -1, 0),
+    )
+
+    out["vwap_cross"] = (
+        (out["vwap_side"] != out["vwap_side"].shift(1))
+        & (out["vwap_side"] != 0)
+        & (out["vwap_side"].shift(1) != 0)
+    )
+
+    out["vwap_cross_count"] = (
+        out["vwap_cross"]
+        .astype(int)
+        .rolling(vwap_cross_lookback, min_periods=1)
+        .sum()
+    )
+
+    out["vwap_shift_flat_check"] = (
+        out["vwap"] - out["vwap"].shift(flat_vwap_lookback)
+    )
+    out["vwap_is_flat"] = (
+        out["vwap_shift_flat_check"].abs()
+        <= config["flat_vwap_threshold_points"]
+    )
+
+    out["possible_chop"] = (
+        (
+            out["vwap_cross_count"]
+            >= config["max_vwap_crosses_before_chop"]
+        )
+        & out["vwap_is_flat"]
+    ) | (
+        out["bands_compressing"]
+        & out["vwap_is_flat"]
+    )
+
+    relative_lookback = int(config["v5_red_shift_relative_lookback_bars"])
+
+    out["v5_long_avg_red_shift_20m"] = (
+        out["v2_long_directional_red_shift"]
+        .clip(lower=0)
+        .rolling(relative_lookback, min_periods=3)
+        .mean()
+        .shift(1)
+    )
+
+    out["v5_short_avg_red_shift_20m"] = (
+        out["v2_short_directional_red_shift"]
+        .clip(lower=0)
+        .rolling(relative_lookback, min_periods=3)
+        .mean()
+        .shift(1)
+    )
+
+    out["v5_long_red_shift_ratio_20m"] = np.where(
+        out["v5_long_avg_red_shift_20m"] > 0,
+        out["v2_long_directional_red_shift"] / out["v5_long_avg_red_shift_20m"],
+        np.nan,
+    )
+
+    out["v5_short_red_shift_ratio_20m"] = np.where(
+        out["v5_short_avg_red_shift_20m"] > 0,
+        out["v2_short_directional_red_shift"] / out["v5_short_avg_red_shift_20m"],
+        np.nan,
+    )
+
+    out["v5_long_red_shift_bucket"] = [
+        classify_red_shift_strength_with_relative_context(value, ratio, config)
+        for value, ratio in zip(
+            out["v2_long_directional_red_shift"],
+            out["v5_long_red_shift_ratio_20m"],
+        )
+    ]
+
+    out["v5_short_red_shift_bucket"] = [
+        classify_red_shift_strength_with_relative_context(value, ratio, config)
+        for value, ratio in zip(
+            out["v2_short_directional_red_shift"],
+            out["v5_short_red_shift_ratio_20m"],
+        )
+    ]
+
+    out["long_touched_upper_green"] = out["low"] <= out["upper_green"]
+    out["long_closed_above_upper_green"] = out["close"] > out["upper_green"]
+    out["long_close_through_green_points"] = out["close"] - out["upper_green"]
+    out["long_extension_from_green_points"] = out["close"] - out["upper_green"]
+
+    out["short_touched_lower_green"] = out["high"] >= out["lower_green"]
+    out["short_closed_below_lower_green"] = out["close"] < out["lower_green"]
+    out["short_close_through_green_points"] = out["lower_green"] - out["close"]
+    out["short_extension_from_green_points"] = out["lower_green"] - out["close"]
+
+    min_close_through_green = float(config["min_close_through_green"])
+    min_body_ratio = float(config["min_body_ratio"])
+
+    out["long_close_through_green_valid"] = (
+        out["long_close_through_green_points"] >= min_close_through_green
+    )
+    out["short_close_through_green_valid"] = (
+        out["short_close_through_green_points"] >= min_close_through_green
+    )
+
+    out["long_body_valid"] = out["body_ratio"] >= min_body_ratio
+    out["short_body_valid"] = out["body_ratio"] >= min_body_ratio
+
+    out["long_not_orange_chase"] = out["close"] < out["upper_orange"]
+    out["short_not_orange_chase"] = out["close"] > out["lower_orange"]
+
+    max_extension_from_green = config.get("max_extension_from_green")
+    a_tier_max_extension_from_green = config.get(
+        "v3_a_tier_max_extension_from_green"
+    )
+
+    if config.get("s_tier_use_extension_filter", True) and max_extension_from_green is not None:
+        out["long_extension_valid"] = (
+            out["long_extension_from_green_points"] <= float(max_extension_from_green)
+        )
+        out["short_extension_valid"] = (
+            out["short_extension_from_green_points"] <= float(max_extension_from_green)
+        )
+    else:
+        out["long_extension_valid"] = True
+        out["short_extension_valid"] = True
+
+    if config.get("a_tier_use_extension_filter", True) and a_tier_max_extension_from_green is not None:
+        out["v3_long_a_tier_extension_valid"] = (
+            out["long_extension_from_green_points"]
+            <= float(a_tier_max_extension_from_green)
+        )
+        out["v3_short_a_tier_extension_valid"] = (
+            out["short_extension_from_green_points"]
+            <= float(a_tier_max_extension_from_green)
+        )
+    else:
+        out["v3_long_a_tier_extension_valid"] = True
+        out["v3_short_a_tier_extension_valid"] = True
+
+    out["v3_long_v1_execution_quality_pass"] = (
+        out["long_close_through_green_valid"]
+        & out["v3_long_a_tier_extension_valid"]
+        & out["long_body_valid"]
+        & out["long_not_orange_chase"]
+        & ~out["possible_chop"]
+    )
+
+    out["v3_short_v1_execution_quality_pass"] = (
+        out["short_close_through_green_valid"]
+        & out["v3_short_a_tier_extension_valid"]
+        & out["short_body_valid"]
+        & out["short_not_orange_chase"]
+        & ~out["possible_chop"]
+    )
+
+    v4_realised_range_lookback = int(config["v4_realised_range_lookback"])
+    v4_min_realised_range_periods = int(config["v4_min_realised_range_periods"])
+    v4_vwap_slope_lookback = int(config["v4_vwap_slope_lookback"])
+    v4_band_width_lookback = int(config["v4_band_width_lookback"])
+    v4_min_band_width_periods = int(config["v4_min_band_width_periods"])
+    v4_band_expansion_lookback = int(config["v4_band_expansion_lookback"])
+    v4_vwap_cross_lookback = int(config["v4_vwap_cross_lookback"])
+    v4_recent_extreme_lookback = int(config["v4_recent_extreme_lookback"])
+
+    out["v4_realised_range_points"] = out["high"] - out["low"]
+
+    out["v4_realised_range_average"] = (
+        out["v4_realised_range_points"]
+        .rolling(
+            v4_realised_range_lookback,
+            min_periods=v4_min_realised_range_periods,
+        )
+        .mean()
+        .shift(1)
+    )
+
+    out["v4_realised_range_relative_to_average"] = np.where(
+        out["v4_realised_range_average"] > 0,
+        out["v4_realised_range_points"] / out["v4_realised_range_average"],
+        np.nan,
+    )
+
+    out["v4_high_realised_volatility"] = (
+        out["v4_realised_range_relative_to_average"]
+        >= config["v4_high_realised_range_ratio"]
+    )
+
+    out["v4_extreme_realised_volatility"] = (
+        out["v4_realised_range_relative_to_average"]
+        >= config["v4_extreme_realised_range_ratio"]
+    )
+
+    out["v4_vwap_slope_points"] = (
+        out["vwap"] - out["vwap"].shift(v4_vwap_slope_lookback)
+    )
+
+    out["v4_vwap_slope_abs_points"] = out["v4_vwap_slope_points"].abs()
+
+    out["v4_vwap_is_flat"] = (
+        out["v4_vwap_slope_abs_points"]
+        <= config["v4_flat_vwap_threshold_points"]
+    )
+
+    out["v4_red_band_width"] = out["red_band_width"]
+
+    out["v4_red_band_width_average"] = (
+        out["v4_red_band_width"]
+        .rolling(v4_band_width_lookback, min_periods=v4_min_band_width_periods)
+        .mean()
+        .shift(1)
+    )
+
+    out["v4_red_band_width_relative_to_average"] = np.where(
+        out["v4_red_band_width_average"] > 0,
+        out["v4_red_band_width"] / out["v4_red_band_width_average"],
+        np.nan,
+    )
+
+    out["v4_red_band_width_change"] = (
+        out["v4_red_band_width"]
+        - out["v4_red_band_width"].shift(v4_band_expansion_lookback)
+    )
+
+    out["v4_red_bands_expanding"] = (
+        out["v4_red_band_width_change"] > config["v4_min_band_expansion_points"]
+    )
+
+    out["v4_red_bands_compressing"] = out["v4_red_band_width_change"] < 0
+
+    out["v4_wide_bands"] = (
+        out["v4_red_band_width_relative_to_average"]
+        >= config["v4_wide_band_width_ratio"]
+    )
+
+    out["v4_recent_vwap_cross_count"] = (
+        out["vwap_cross"]
+        .astype(int)
+        .rolling(v4_vwap_cross_lookback, min_periods=1)
+        .sum()
+    )
+
+    out["v4_chop_from_vwap_crosses"] = (
+        out["v4_recent_vwap_cross_count"]
+        > config["v4_max_vwap_crosses_for_trend"]
+    )
+
+    out["v4_chop_from_flat_vwap_and_compression"] = (
+        out["v4_vwap_is_flat"] & out["v4_red_bands_compressing"]
+    )
+
+    out["v4_chop_or_unclear_value"] = (
+        out["possible_chop"]
+        | out["v4_chop_from_vwap_crosses"]
+        | out["v4_chop_from_flat_vwap_and_compression"]
+    )
+
+    out["v4_bullish_directional_context"] = (
+        out["accepted_above_vwap"]
+        & (out["close"] > out["vwap"])
+        & (out["close"] > out["upper_green"])
+    )
+
+    out["v4_bearish_directional_context"] = (
+        out["accepted_below_vwap"]
+        & (out["close"] < out["vwap"])
+        & (out["close"] < out["lower_green"])
+    )
+
+    out["v4_directional_trend_context"] = (
+        out["v4_bullish_directional_context"]
+        | out["v4_bearish_directional_context"]
+    )
+
+    out["v4_directional_red_shift_strength"] = np.select(
+        [
+            out["v4_bullish_directional_context"],
+            out["v4_bearish_directional_context"],
+        ],
+        [
+            out["bullish_red_shift_strength"],
+            out["bearish_red_shift_strength"],
+        ],
+        default=np.nan,
+    )
+
+    out["v4_abnormal_red_shift_context"] = (
+        out["v4_directional_red_shift_strength"]
+        >= config["red_shift_abnormal_points"]
+    )
+
+    out["v4_recent_abnormal_red_shift_context"] = (
+        out["v4_abnormal_red_shift_context"]
+        .astype(int)
+        .rolling(v4_recent_extreme_lookback, min_periods=1)
+        .max()
+        .astype(bool)
+    )
+
+    out["v4_extreme_news_context"] = (
+        out["v4_recent_abnormal_red_shift_context"]
+        | out["v4_extreme_realised_volatility"]
+    )
+
+    out["v4_volatile_directional_context"] = (
+        out["v4_directional_trend_context"]
+        & (
+            out["v4_high_realised_volatility"]
+            | out["v4_wide_bands"]
+            | out["v4_red_bands_expanding"]
+        )
+    )
+
+    out["v4_calm_directional_context"] = (
+        out["v4_directional_trend_context"]
+        & ~out["v4_high_realised_volatility"]
+        & ~out["v4_wide_bands"]
+        & ~out["v4_chop_or_unclear_value"]
+    )
+
+    out["v4_preliminary_regime_label"] = np.select(
+        [
+            out["v4_extreme_news_context"],
+            out["v4_chop_or_unclear_value"] | ~out["v4_directional_trend_context"],
+            out["v4_volatile_directional_context"],
+            out["v4_calm_directional_context"],
+        ],
+        [
+            "extreme_news",
+            "chop",
+            "volatile_trend",
+            "calm_trend",
+        ],
+        default="chop",
+    )
+
+    out["v5_abnormal_news_context"] = (
+        out["v5_long_red_shift_bucket"].eq("abnormal_news")
+        | out["v5_short_red_shift_bucket"].eq("abnormal_news")
+        | out["v4_abnormal_red_shift_context"].fillna(False).astype(bool)
+    )
+
+    out["v5_extreme_expansion_context"] = (
+        out["v4_red_bands_expanding"]
+        & (
+            out["v5_long_red_shift_bucket"].isin(["extreme", "very_extreme"])
+            | out["v5_short_red_shift_bucket"].isin(["extreme", "very_extreme"])
+        )
+    )
+
+    out["v5_very_extreme_expansion_context"] = (
+        out["v5_extreme_expansion_context"]
+        & (
+            out["v5_long_red_shift_bucket"].eq("very_extreme")
+            | out["v5_short_red_shift_bucket"].eq("very_extreme")
+        )
+    )
+
+    out["v5_regime_20m"] = np.select(
+        [
+            out["v5_abnormal_news_context"],
+            out["v5_very_extreme_expansion_context"],
+            out["v5_extreme_expansion_context"],
+        ],
+        [
+            "abnormal_news",
+            "very_extreme_expansion",
+            "extreme_expansion",
+        ],
+        default=out["v4_preliminary_regime_label"],
+    )
+
+    return out.copy()
 
 
 def prepare_candles_for_src_engine(candles: pd.DataFrame) -> pd.DataFrame:
@@ -1191,7 +2119,11 @@ def compute_live_feature_context(candles: pd.DataFrame) -> pd.DataFrame:
 
     validate_engine_output_columns(df)
 
+    df = add_live_automation_features(df, engine_config)
+    validate_automation_feature_columns(df)
+
     latest_feature_time = df["datetime"].iloc[-1] if not df.empty else ""
+    latest_row = df.iloc[-1] if not df.empty else {}
 
     log_event(
         "HEARTBEAT",
@@ -1199,7 +2131,12 @@ def compute_live_feature_context(candles: pd.DataFrame) -> pd.DataFrame:
         src_import_status="ok",
         feature_rows=len(df),
         latest_feature_time=latest_feature_time,
-        message=f"Built VWAP feature context with {len(df)} rows",
+        automation_feature_rows=len(df),
+        latest_automation_time=latest_feature_time,
+        latest_regime_label=latest_row.get("v5_regime_20m", ""),
+        latest_long_trend_health=latest_row.get("v2_long_trend_health_pass", ""),
+        latest_short_trend_health=latest_row.get("v2_short_trend_health_pass", ""),
+        message=f"Built live automation feature context with {len(df)} rows",
     )
 
     return df
@@ -1234,13 +2171,20 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
     if features_df.empty:
         return None
 
+    latest_feature_row = features_df.iloc[-1]
+
     log_event(
         "HEARTBEAT",
         signal_time=latest_closed.name,
         feature_rows=len(features_df),
-        latest_feature_time=features_df["datetime"].iloc[-1],
+        latest_feature_time=latest_feature_row["datetime"],
+        automation_feature_rows=len(features_df),
+        latest_automation_time=latest_feature_row["datetime"],
+        latest_regime_label=latest_feature_row.get("v5_regime_20m", ""),
+        latest_long_trend_health=latest_feature_row.get("v2_long_trend_health_pass", ""),
+        latest_short_trend_health=latest_feature_row.get("v2_short_trend_health_pass", ""),
         decision="features_only",
-        message="VWAP feature context built; no entry selection applied yet",
+        message="Live automation feature context built; no entry selection applied yet",
     )
 
     return None
@@ -2308,6 +3252,30 @@ def validate_config() -> None:
     if REQUIRE_SRC_FEATURE_ENGINE and not USE_SRC_FEATURE_ENGINE:
         raise ValueError(
             "REQUIRE_SRC_FEATURE_ENGINE cannot be True when USE_SRC_FEATURE_ENGINE is False"
+        )
+    
+        required_automation_keys = [
+        "shift_lookback",
+        "acceptance_lookback",
+        "compression_lookback",
+        "flat_vwap_lookback",
+        "vwap_cross_lookback",
+        "v2_trend_health_lookback",
+        "v3_min_directional_red_shift_points",
+        "v4_realised_range_lookback",
+        "v5_red_shift_relative_lookback_bars",
+    ]
+
+    missing_automation_keys = [
+        key
+        for key in required_automation_keys
+        if key not in AUTOMATION_FEATURE_CONFIG
+    ]
+
+    if missing_automation_keys:
+        raise ValueError(
+            "Missing automation feature config keys: "
+            + ", ".join(missing_automation_keys)
         )
 
     if EXECUTION_MODE not in valid_execution_modes:
