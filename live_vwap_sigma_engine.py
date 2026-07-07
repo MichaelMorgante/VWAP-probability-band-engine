@@ -270,6 +270,22 @@ CONTINUATION_SIGNAL_SELECTION_MODE = "priority_first"
 # "strongest_red_shift" = choose the classified candidate with strongest red shift
 
 # ============================================================
+# REGIME ROUTER CONFIG
+# ============================================================
+
+LOG_REGIME_ROUTER_DECISIONS = True
+
+CONTINUATION_BLOCKED_REGIMES = {
+    "chop",
+    "extreme_news",
+    "abnormal_news",
+    "extreme_expansion",
+    "very_extreme_expansion",
+}
+# These regimes block continuation promotion by default.
+# Later bypass commits can selectively override this.
+
+# ============================================================
 # CORE STRATEGY CONFIG
 # ============================================================
 
@@ -599,6 +615,11 @@ LOG_FIELDS = [
     "selected_signal_direction",
     "selected_signal_reason",
     "selected_signal_selection_mode",
+    "router_pass",
+    "router_reason",
+    "router_regime",
+    "router_setup_family",
+    "router_mode",
     "message",
 ]
 
@@ -2773,6 +2794,156 @@ def promote_classified_candidates_to_signal(
     return signal
 
 # ============================================================
+# REGIME ROUTER
+# ============================================================
+
+def candidate_regime_label(candidate: ClassifiedContinuationCandidate) -> str:
+    return str(candidate.regime_label or "unknown")
+
+
+def setup_allowed_in_calm_trend(candidate: ClassifiedContinuationCandidate) -> tuple[bool, str]:
+    setup_family = candidate.setup_family
+    profile = SETUP_PROFILES.get(setup_family, {})
+
+    if setup_family in {"S_TIER", "DYNAMIC_S_TIER"}:
+        return True, f"{setup_family} allowed in calm trend"
+
+    if setup_family == "A_TIER":
+        if not profile.get("allow_in_calm_trend", False):
+            return False, "A-tier blocked in calm trend by setup profile"
+
+        if profile.get("calm_require_red_shift_floor", False):
+            min_points = float(
+                profile.get(
+                    "calm_min_directional_red_shift_points",
+                    setup_min_red_shift_points(setup_family),
+                )
+            )
+
+            if candidate.red_shift_points < min_points:
+                return False, (
+                    f"A-tier calm-trend red-shift floor failed: "
+                    f"{candidate.red_shift_points:.2f} < {min_points:.2f}"
+                )
+
+        return True, "A-tier allowed in calm trend by setup profile"
+
+    if setup_family == "DELAYED_PULLBACK":
+        return False, "Delayed pullback calm-trend routing not enabled yet"
+
+    return False, f"Unknown setup family for calm-trend routing: {setup_family}"
+
+
+def setup_allowed_in_volatile_trend(candidate: ClassifiedContinuationCandidate) -> tuple[bool, str]:
+    setup_family = candidate.setup_family
+    profile = SETUP_PROFILES.get(setup_family, {})
+
+    if setup_family == "S_TIER":
+        if not profile.get("allow_in_volatile_trend", False):
+            return False, "S-tier blocked in volatile trend by setup profile"
+
+        if profile.get("volatile_require_red_shift_floor", False):
+            min_points = float(
+                profile.get(
+                    "volatile_min_directional_red_shift_points",
+                    setup_min_red_shift_points(setup_family),
+                )
+            )
+
+            if candidate.red_shift_points < min_points:
+                return False, (
+                    f"S-tier volatile-trend red-shift floor failed: "
+                    f"{candidate.red_shift_points:.2f} < {min_points:.2f}"
+                )
+
+        return True, "S-tier allowed in volatile trend by setup profile"
+
+    if setup_family == "DYNAMIC_S_TIER":
+        return True, "Dynamic S-tier allowed in volatile trend"
+
+    if setup_family == "A_TIER":
+        return True, "A-tier allowed in volatile trend"
+
+    if setup_family == "DELAYED_PULLBACK":
+        return True, "Delayed pullback allowed in volatile trend"
+
+    return False, f"Unknown setup family for volatile-trend routing: {setup_family}"
+
+
+def regime_router_decision(
+    candidate: ClassifiedContinuationCandidate,
+) -> tuple[bool, str]:
+    if not USE_STRATEGY_FILTER:
+        return True, "Strategy filter disabled"
+
+    if not ENABLE_REGIME_ROUTER:
+        return True, "Regime router disabled"
+
+    if STRATEGY_FILTER_MODE != "v4_dynamic_regime_selector":
+        return True, f"Router mode not handled here; allowing: {STRATEGY_FILTER_MODE}"
+
+    regime_label = candidate_regime_label(candidate)
+
+    if regime_label in CONTINUATION_BLOCKED_REGIMES:
+        return False, f"Continuation blocked in regime: {regime_label}"
+
+    if regime_label == "calm_trend":
+        return setup_allowed_in_calm_trend(candidate)
+
+    if regime_label == "volatile_trend":
+        return setup_allowed_in_volatile_trend(candidate)
+
+    return False, f"Unknown or unsupported continuation regime: {regime_label}"
+
+
+def log_regime_router_decision(
+    candidate: ClassifiedContinuationCandidate,
+    router_pass: bool,
+    router_reason: str,
+) -> None:
+    if not LOG_REGIME_ROUTER_DECISIONS:
+        return
+
+    log_event(
+        "REGIME_ROUTER_DECISION",
+        signal_time=candidate.candidate_time,
+        direction=candidate.direction,
+        setup_family=candidate.setup_family,
+        entry_price=candidate.entry_price,
+        decision="router_pass" if router_pass else "router_block",
+        router_pass=router_pass,
+        router_reason=router_reason,
+        router_regime=candidate_regime_label(candidate),
+        router_setup_family=candidate.setup_family,
+        router_mode=STRATEGY_FILTER_MODE,
+        raw_candidate_red_shift_points=candidate.red_shift_points,
+        raw_candidate_red_shift_label=candidate.red_shift_label,
+        raw_candidate_trend_health_pass=candidate.trend_health_pass,
+        raw_candidate_extension_points=candidate.extension_from_green_points,
+        message=router_reason,
+    )
+
+
+def apply_regime_router_to_classified_candidates(
+    candidates: list[ClassifiedContinuationCandidate],
+) -> list[ClassifiedContinuationCandidate]:
+    routed_candidates: list[ClassifiedContinuationCandidate] = []
+
+    for candidate in candidates:
+        router_pass, router_reason = regime_router_decision(candidate)
+
+        log_regime_router_decision(
+            candidate=candidate,
+            router_pass=router_pass,
+            router_reason=router_reason,
+        )
+
+        if router_pass:
+            routed_candidates.append(candidate)
+
+    return routed_candidates
+
+# ============================================================
 # SIGNAL PROCESSING SHELL
 # ============================================================
 
@@ -2816,7 +2987,11 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
     for candidate in classified_candidates:
         log_classified_continuation_candidate(candidate)
 
-    selected_signal = promote_classified_candidates_to_signal(classified_candidates)
+    routed_candidates = apply_regime_router_to_classified_candidates(
+        classified_candidates
+    )
+
+    selected_signal = promote_classified_candidates_to_signal(routed_candidates)
 
     decision = "signal_selected" if selected_signal is not None else "no_signal"
 
@@ -2832,12 +3007,15 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
         latest_short_trend_health=latest_feature_row.get("v2_short_trend_health_pass", ""),
         raw_candidate_count=len(raw_candidates),
         classified_candidate_count=len(classified_candidates),
+        router_pass=len(routed_candidates) > 0,
+        router_regime=latest_feature_row.get("v5_regime_20m", ""),
+        router_mode=STRATEGY_FILTER_MODE,
         selected_signal_setup_family=selected_signal.setup_family if selected_signal else "",
         selected_signal_direction=selected_signal.direction if selected_signal else "",
         selected_signal_reason=selected_signal.reason if selected_signal else "",
         selected_signal_selection_mode=CONTINUATION_SIGNAL_SELECTION_MODE,
         decision=decision,
-        message="Continuation signal promotion completed",
+        message="Continuation signal promotion completed after regime-router gate",
     )
 
     return selected_signal
@@ -3966,6 +4144,14 @@ def validate_config() -> None:
             "CONTINUATION_SIGNAL_SELECTION_MODE must be one of: "
             "priority_first, strongest_red_shift"
         )
+    
+    if not isinstance(CONTINUATION_BLOCKED_REGIMES, set):
+        raise ValueError("CONTINUATION_BLOCKED_REGIMES must be a set")
+
+    if LOG_REGIME_ROUTER_DECISIONS and not ENABLE_REGIME_ROUTER:
+        print("")
+        print("WARNING: LOG_REGIME_ROUTER_DECISIONS is True but ENABLE_REGIME_ROUTER is False.")
+        print("")
 
     if EXECUTION_MODE not in valid_execution_modes:
         raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
@@ -4086,6 +4272,8 @@ def print_startup_config() -> None:
     print(f"- Enable continuation signal promotion: {ENABLE_CONTINUATION_SIGNAL_PROMOTION}")
     print(f"- Log selected continuation signal: {LOG_SELECTED_CONTINUATION_SIGNAL}")
     print(f"- Continuation signal selection mode: {CONTINUATION_SIGNAL_SELECTION_MODE}")
+    print(f"- Log regime-router decisions: {LOG_REGIME_ROUTER_DECISIONS}")
+    print(f"- Continuation blocked regimes: {sorted(CONTINUATION_BLOCKED_REGIMES)}")
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
