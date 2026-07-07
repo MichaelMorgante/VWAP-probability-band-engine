@@ -3254,7 +3254,7 @@ def validate_config() -> None:
             "REQUIRE_SRC_FEATURE_ENGINE cannot be True when USE_SRC_FEATURE_ENGINE is False"
         )
     
-        required_automation_keys = [
+    required_automation_keys = [
         "shift_lookback",
         "acceptance_lookback",
         "compression_lookback",
