@@ -82,6 +82,15 @@ MT5_SERVER = None
 MT5_TIMEOUT_MS = 60_000
 MT5_PORTABLE_MODE = False
 
+ORDER_DEVIATION_POINTS = 20
+ORDER_FILLING_MODE = "IOC"
+# options:
+# "IOC"    = immediate-or-cancel
+# "FOK"    = fill-or-kill
+# "RETURN" = return remainder if supported by broker
+
+CLOSE_IF_SL_MISSING_AFTER_FILL = True
+
 
 # ============================================================
 # SESSION / TIME CONFIG
@@ -416,6 +425,11 @@ LOG_FIELDS = [
     "position_profit",
     "position_magic",
     "positions_source",
+    "order_type",
+    "order_price",
+    "order_volume",
+    "order_comment",
+    "close_reason",
     "message",
 ]
 
@@ -907,22 +921,11 @@ def handle_signal(
             )
             return
 
-        log_event(
-            "SIGNAL_BLOCKED",
-            signal_time=signal.signal_time,
-            direction=signal.direction,
-            setup_family=signal.setup_family,
-            entry_price=signal.entry_price,
-            sl_price=signal.sl_price,
-            tp_price=signal.tp_price,
-            runner_target_r=signal.runner_target_r,
-            runner_target_points=signal.runner_target_points,
-            decision="blocked",
-            block_reason="Order placement is not implemented yet",
-            message="Signal passed shell checks, but order placement is not implemented yet",
-        )
+        result = place_trade(signal)
 
-        last_ordered_signal_time = signal_time_key
+        if result is not None:
+            last_ordered_signal_time = signal_time_key
+
         return
 
     raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
@@ -1326,6 +1329,386 @@ def is_position_protected(position: Any) -> bool:
 
     return False
 
+# ============================================================
+# ORDER EXECUTION HELPERS
+# ============================================================
+
+def get_order_filling_mode() -> Any:
+    require_mt5()
+
+    filling_modes = {
+        "IOC": mt5.ORDER_FILLING_IOC,
+        "FOK": mt5.ORDER_FILLING_FOK,
+        "RETURN": mt5.ORDER_FILLING_RETURN,
+    }
+
+    if ORDER_FILLING_MODE not in filling_modes:
+        raise ValueError(f"Invalid ORDER_FILLING_MODE: {ORDER_FILLING_MODE}")
+
+    return filling_modes[ORDER_FILLING_MODE]
+
+
+def get_order_type(direction: str) -> Any:
+    require_mt5()
+
+    if direction == "BUY":
+        return mt5.ORDER_TYPE_BUY
+
+    if direction == "SELL":
+        return mt5.ORDER_TYPE_SELL
+
+    raise ValueError(f"Invalid direction: {direction}")
+
+
+def get_order_price(direction: str) -> float | None:
+    require_mt5()
+
+    tick = mt5.symbol_info_tick(SYMBOL)
+
+    if tick is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message="No MT5 tick data available",
+        )
+
+        return None
+
+    if direction == "BUY":
+        return float(tick.ask)
+
+    if direction == "SELL":
+        return float(tick.bid)
+
+    raise ValueError(f"Invalid direction: {direction}")
+
+
+def validate_signal_order_inputs(signal: TradeSignal) -> tuple[bool, str]:
+    if not mt5_available():
+        return False, "MetaTrader5 package is not installed"
+
+    if not is_mt5_connected():
+        return False, "MT5 is not connected"
+
+    if LOT_SIZE <= 0:
+        return False, "LOT_SIZE must be > 0"
+
+    if signal.direction not in {"BUY", "SELL"}:
+        return False, f"Invalid signal direction: {signal.direction}"
+
+    if signal.sl_price <= 0:
+        return False, "SL price must be > 0"
+
+    if signal.tp_price <= 0:
+        return False, "TP price must be > 0"
+
+    if signal.direction == "BUY":
+        if not signal.sl_price < signal.entry_price < signal.tp_price:
+            return False, "Invalid BUY SL/entry/TP ordering"
+
+    if signal.direction == "SELL":
+        if not signal.tp_price < signal.entry_price < signal.sl_price:
+            return False, "Invalid SELL TP/entry/SL ordering"
+
+    return True, "Order inputs valid"
+
+
+def find_position_by_order_result(result: Any) -> Any | None:
+    if mt5 is None:
+        return None
+
+    positions = get_open_bot_positions()
+
+    result_position_ticket = getattr(result, "position", 0)
+    result_order_ticket = getattr(result, "order", 0)
+
+    for position in positions:
+        position_ticket = getattr(position, "ticket", None)
+        position_identifier = getattr(position, "identifier", None)
+
+        if result_position_ticket and position_ticket == result_position_ticket:
+            return position
+
+        if result_position_ticket and position_identifier == result_position_ticket:
+            return position
+
+        if result_order_ticket and position_ticket == result_order_ticket:
+            return position
+
+    if len(positions) == 1:
+        return positions[0]
+
+    return None
+
+
+def close_position_immediately(position: Any, reason: str) -> Any | None:
+    require_mt5()
+
+    position_type = getattr(position, "type", None)
+    position_volume = float(getattr(position, "volume", 0.0) or 0.0)
+    position_ticket = getattr(position, "ticket", None)
+
+    if position_volume <= 0:
+        log_event(
+            "CRITICAL",
+            position_ticket=position_ticket,
+            close_reason=reason,
+            message="Cannot close position because volume is invalid",
+        )
+        return None
+
+    if position_type == mt5.POSITION_TYPE_BUY:
+        close_direction = "SELL"
+        close_order_type = mt5.ORDER_TYPE_SELL
+        close_price = get_order_price("SELL")
+
+    elif position_type == mt5.POSITION_TYPE_SELL:
+        close_direction = "BUY"
+        close_order_type = mt5.ORDER_TYPE_BUY
+        close_price = get_order_price("BUY")
+
+    else:
+        log_event(
+            "CRITICAL",
+            position_ticket=position_ticket,
+            close_reason=reason,
+            message="Cannot close position because type is invalid",
+        )
+        return None
+
+    if close_price is None:
+        return None
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": SYMBOL,
+        "volume": position_volume,
+        "type": close_order_type,
+        "position": position_ticket,
+        "price": close_price,
+        "deviation": ORDER_DEVIATION_POINTS,
+        "magic": MAGIC_NUMBER,
+        "comment": f"{ORDER_COMMENT}_SAFETY_CLOSE",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": get_order_filling_mode(),
+    }
+
+    log_event(
+        "CRITICAL",
+        direction=close_direction,
+        position_ticket=position_ticket,
+        order_price=close_price,
+        order_volume=position_volume,
+        close_reason=reason,
+        message="Attempting immediate safety close",
+    )
+
+    result = mt5.order_send(request)
+
+    if result is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "CRITICAL",
+            position_ticket=position_ticket,
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            close_reason=reason,
+            message="Safety close failed: order_send returned None",
+        )
+
+        return None
+
+    log_event(
+        "POSITION_CLOSED",
+        position_ticket=position_ticket,
+        retcode=getattr(result, "retcode", ""),
+        close_reason=reason,
+        message="Safety close order sent",
+    )
+
+    return result
+
+
+def verify_filled_position_has_sl_tp(position: Any, signal: TradeSignal) -> bool:
+    position_sl = float(getattr(position, "sl", 0.0) or 0.0)
+    position_tp = float(getattr(position, "tp", 0.0) or 0.0)
+    position_ticket = getattr(position, "ticket", "")
+
+    has_sl = position_sl != 0.0
+    has_tp = position_tp != 0.0
+
+    if has_sl and has_tp:
+        log_event(
+            "HEARTBEAT",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            position_ticket=position_ticket,
+            position_sl=position_sl,
+            position_tp=position_tp,
+            message="Filled position has SL and TP attached",
+        )
+
+        return True
+
+    log_event(
+        "CRITICAL",
+        signal_time=signal.signal_time,
+        direction=signal.direction,
+        setup_family=signal.setup_family,
+        position_ticket=position_ticket,
+        position_sl=position_sl,
+        position_tp=position_tp,
+        block_reason="Filled position missing SL or TP",
+        message="Filled position missing SL or TP",
+    )
+
+    if CLOSE_IF_SL_MISSING_AFTER_FILL and not has_sl:
+        close_position_immediately(
+            position,
+            reason="Filled position missing SL after order fill",
+        )
+
+    return False
+
+
+def place_trade(signal: TradeSignal) -> Any | None:
+    order_inputs_ok, order_inputs_message = validate_signal_order_inputs(signal)
+
+    if not order_inputs_ok:
+        log_event(
+            "ORDER_REJECTED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            entry_price=signal.entry_price,
+            sl_price=signal.sl_price,
+            tp_price=signal.tp_price,
+            runner_target_r=signal.runner_target_r,
+            runner_target_points=signal.runner_target_points,
+            decision="blocked",
+            block_reason=order_inputs_message,
+            message=order_inputs_message,
+        )
+
+        return None
+
+    order_type = get_order_type(signal.direction)
+    price = get_order_price(signal.direction)
+
+    if price is None:
+        log_event(
+            "ORDER_REJECTED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            decision="blocked",
+            block_reason="No executable order price available",
+            message="No executable order price available",
+        )
+
+        return None
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": SYMBOL,
+        "volume": LOT_SIZE,
+        "type": order_type,
+        "price": price,
+        "sl": signal.sl_price,
+        "tp": signal.tp_price,
+        "deviation": ORDER_DEVIATION_POINTS,
+        "magic": MAGIC_NUMBER,
+        "comment": ORDER_COMMENT,
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": get_order_filling_mode(),
+    }
+
+    log_event(
+        "ORDER_ATTEMPT",
+        signal_time=signal.signal_time,
+        direction=signal.direction,
+        setup_family=signal.setup_family,
+        entry_price=signal.entry_price,
+        sl_price=signal.sl_price,
+        tp_price=signal.tp_price,
+        runner_target_r=signal.runner_target_r,
+        runner_target_points=signal.runner_target_points,
+        order_type=signal.direction,
+        order_price=price,
+        order_volume=LOT_SIZE,
+        order_comment=ORDER_COMMENT,
+        message="Sending MT5 order",
+    )
+
+    result = mt5.order_send(request)
+
+    if result is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ORDER_REJECTED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message="order_send returned None",
+        )
+
+        return None
+
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        log_event(
+            "ORDER_REJECTED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            retcode=result.retcode,
+            message=str(result),
+        )
+
+        return None
+
+    log_event(
+        "ORDER_FILLED",
+        signal_time=signal.signal_time,
+        direction=signal.direction,
+        setup_family=signal.setup_family,
+        entry_price=signal.entry_price,
+        sl_price=signal.sl_price,
+        tp_price=signal.tp_price,
+        runner_target_r=signal.runner_target_r,
+        runner_target_points=signal.runner_target_points,
+        order_ticket=getattr(result, "order", ""),
+        position_ticket=getattr(result, "position", ""),
+        retcode=result.retcode,
+        message="Order filled",
+    )
+
+    filled_position = find_position_by_order_result(result)
+
+    if filled_position is None:
+        log_event(
+            "CRITICAL",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            order_ticket=getattr(result, "order", ""),
+            position_ticket=getattr(result, "position", ""),
+            message="Order filled but matching position could not be confirmed",
+        )
+
+        return result
+
+    verify_filled_position_has_sl_tp(filled_position, signal)
+
+    return result
+
 
 def can_open_new_continuation_trade(open_positions: list[Any]) -> tuple[bool, str]:
     open_positions_count = len(open_positions)
@@ -1588,6 +1971,12 @@ def validate_config() -> None:
 
     if MT5_TIMEOUT_MS <= 0:
         raise ValueError("MT5_TIMEOUT_MS must be > 0")
+    
+    if ORDER_DEVIATION_POINTS < 0:
+        raise ValueError("ORDER_DEVIATION_POINTS must be >= 0")
+
+    if ORDER_FILLING_MODE not in {"IOC", "FOK", "RETURN"}:
+        raise ValueError("ORDER_FILLING_MODE must be one of: IOC, FOK, RETURN")
 
     parse_hhmm_time(MARKET_OPEN_TIME, "MARKET_OPEN_TIME")
     get_timezone(TRADING_TIMEZONE)
@@ -1633,6 +2022,9 @@ def print_startup_config() -> None:
     print(f"- MT5 terminal path: {MT5_TERMINAL_PATH}")
     print(f"- MT5 login configured: {MT5_LOGIN is not None}")
     print(f"- MT5 server configured: {MT5_SERVER is not None}")
+    print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
+    print(f"- Order filling mode: {ORDER_FILLING_MODE}")
+    print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
     print(f"- Run live loop on startup: {RUN_LIVE_LOOP_ON_STARTUP}")
     print(f"- Poll seconds: {POLL_SECONDS}")
     print(f"- Candle confirmation delay seconds: {CANDLE_CONFIRMATION_DELAY_SECONDS}")
