@@ -241,6 +241,23 @@ LOG_RAW_CONTINUATION_CANDIDATES = True
 # They are not promoted to executable TradeSignal objects in this commit.
 
 # ============================================================
+# SETUP CLASSIFICATION CONFIG
+# ============================================================
+
+ENABLE_SETUP_CLASSIFICATION = True
+LOG_SETUP_CLASSIFICATION = True
+
+SETUP_CLASSIFICATION_PRIORITY = [
+    "DYNAMIC_S_TIER",
+    "S_TIER",
+    "A_TIER",
+    "DELAYED_PULLBACK",
+]
+# Raw candidates are checked against setup families in this order.
+# This commit classifies/logs setup families only.
+# It does not promote candidates to executable TradeSignal objects.
+
+# ============================================================
 # CORE STRATEGY CONFIG
 # ============================================================
 
@@ -557,6 +574,15 @@ LOG_FIELDS = [
     "raw_candidate_extension_points",
     "raw_candidate_close_through_green_points",
     "raw_candidate_body_ratio",
+    "classified_candidate_count",
+    "classified_setup_family",
+    "classified_candidate_pass",
+    "classified_candidate_reason",
+    "setup_profile_enabled",
+    "setup_red_shift_floor_pass",
+    "setup_trend_health_pass",
+    "setup_extension_pass",
+    "setup_family_priority_rank",
     "message",
 ]
 
@@ -605,6 +631,26 @@ class RawContinuationCandidate:
     extension_from_green_points: float
     close_through_green_points: float
     body_ratio: float
+
+@dataclass
+class ClassifiedContinuationCandidate:
+    candidate_time: Any
+    direction: str
+    setup_family: str
+    entry_price: float
+    reason: str
+    regime_label: str
+    red_shift_points: float
+    red_shift_label: str
+    trend_health_pass: bool
+    extension_from_green_points: float
+    close_through_green_points: float
+    body_ratio: float
+    setup_profile_enabled: bool
+    red_shift_floor_pass: bool
+    setup_trend_health_pass: bool
+    setup_extension_pass: bool
+    setup_family_priority_rank: int
 
 # ============================================================
 # RUNTIME STATE
@@ -1763,11 +1809,21 @@ def add_live_automation_features(
     ]
 
     out["long_touched_upper_green"] = out["low"] <= out["upper_green"]
+    out["long_locked_upper_green_touch"] = out["low"] <= out["upper_green"].shift(1)
+    out["long_band_shift_touch"] = (
+        out["long_touched_upper_green"]
+        & ~out["long_locked_upper_green_touch"].fillna(False).astype(bool)
+    )
     out["long_closed_above_upper_green"] = out["close"] > out["upper_green"]
     out["long_close_through_green_points"] = out["close"] - out["upper_green"]
     out["long_extension_from_green_points"] = out["close"] - out["upper_green"]
 
     out["short_touched_lower_green"] = out["high"] >= out["lower_green"]
+    out["short_locked_lower_green_touch"] = out["high"] >= out["lower_green"].shift(1)
+    out["short_band_shift_touch"] = (
+        out["short_touched_lower_green"]
+        & ~out["short_locked_lower_green_touch"].fillna(False).astype(bool)
+    )
     out["short_closed_below_lower_green"] = out["close"] < out["lower_green"]
     out["short_close_through_green_points"] = out["lower_green"] - out["close"]
     out["short_extension_from_green_points"] = out["lower_green"] - out["close"]
@@ -2349,6 +2405,258 @@ def log_raw_continuation_candidate(candidate: RawContinuationCandidate) -> None:
     )
 
 # ============================================================
+# SETUP-FAMILY CLASSIFICATION
+# ============================================================
+
+def global_setup_enabled(setup_family: str) -> bool:
+    global_switches = {
+        "S_TIER": ENABLE_S_TIER,
+        "DYNAMIC_S_TIER": ENABLE_DYNAMIC_S_TIER,
+        "A_TIER": ENABLE_A_TIER,
+        "DELAYED_PULLBACK": ENABLE_DELAYED_PULLBACK,
+    }
+
+    return bool(global_switches.get(setup_family, False))
+
+
+def setup_profile_enabled(setup_family: str) -> bool:
+    profile = SETUP_PROFILES.get(setup_family, {})
+
+    return bool(profile.get("enabled", False)) and global_setup_enabled(setup_family)
+
+
+def setup_requires_red_shift_floor(setup_family: str) -> bool:
+    profile = SETUP_PROFILES.get(setup_family, {})
+
+    return bool(USE_RED_SHIFT_FLOOR or profile.get("use_red_shift_floor", False))
+
+
+def setup_requires_trend_health(setup_family: str) -> bool:
+    profile = SETUP_PROFILES.get(setup_family, {})
+
+    return bool(USE_TREND_HEALTH_FILTER and profile.get("use_trend_health", False))
+
+
+def setup_requires_extension_filter(setup_family: str) -> bool:
+    profile = SETUP_PROFILES.get(setup_family, {})
+
+    return bool(USE_GREEN_EXTENSION_FILTER and profile.get("use_extension_filter", False))
+
+
+def setup_min_red_shift_points(setup_family: str) -> float:
+    profile = SETUP_PROFILES.get(setup_family, {})
+
+    return float(
+        profile.get(
+            "min_directional_red_shift_points",
+            DEFAULT_MEAN_REVERSION_RED_SHIFT_POINTS,
+        )
+    )
+
+
+def setup_max_extension_from_green_points(setup_family: str) -> float | None:
+    profile = SETUP_PROFILES.get(setup_family, {})
+    value = profile.get("max_entry_extension_from_green_points")
+
+    if value is None:
+        return None
+
+    return float(value)
+
+
+def candidate_band_shift_touch(
+    row: pd.Series,
+    candidate: RawContinuationCandidate,
+) -> bool:
+    if candidate.direction == "BUY":
+        return safe_bool(row.get("long_band_shift_touch"))
+
+    if candidate.direction == "SELL":
+        return safe_bool(row.get("short_band_shift_touch"))
+
+    return False
+
+
+def setup_family_specific_candidate_pass(
+    setup_family: str,
+    row: pd.Series,
+    candidate: RawContinuationCandidate,
+) -> tuple[bool, str]:
+    if setup_family == "DYNAMIC_S_TIER":
+        if not candidate_band_shift_touch(row, candidate):
+            return False, "Candidate is not a band-shift-assisted green touch"
+
+        return True, "Dynamic S-tier band-shift touch candidate"
+
+    if setup_family == "S_TIER":
+        if candidate_band_shift_touch(row, candidate):
+            return False, "Band-shift-assisted touch is reserved for Dynamic S-tier"
+
+        return True, "S-tier direct green touch/reclaim candidate"
+
+    if setup_family == "A_TIER":
+        return True, "A-tier second-close continuation candidate"
+
+    if setup_family == "DELAYED_PULLBACK":
+        return False, "Delayed pullback state is not ported yet"
+
+    return False, f"Unknown setup family: {setup_family}"
+
+
+def setup_quality_passes(
+    setup_family: str,
+    candidate: RawContinuationCandidate,
+) -> tuple[bool, bool, bool]:
+    if setup_requires_red_shift_floor(setup_family):
+        red_shift_floor_pass = (
+            candidate.red_shift_points >= setup_min_red_shift_points(setup_family)
+        )
+    else:
+        red_shift_floor_pass = True
+
+    if setup_requires_trend_health(setup_family):
+        setup_trend_health_pass = candidate.trend_health_pass
+    else:
+        setup_trend_health_pass = True
+
+    if setup_requires_extension_filter(setup_family):
+        max_extension = setup_max_extension_from_green_points(setup_family)
+
+        if max_extension is None:
+            setup_extension_pass = True
+        else:
+            setup_extension_pass = candidate.extension_from_green_points <= max_extension
+    else:
+        setup_extension_pass = True
+
+    return (
+        bool(red_shift_floor_pass),
+        bool(setup_trend_health_pass),
+        bool(setup_extension_pass),
+    )
+
+
+def classify_raw_continuation_candidate(
+    row: pd.Series,
+    candidate: RawContinuationCandidate,
+) -> ClassifiedContinuationCandidate | None:
+    if not ENABLE_SETUP_CLASSIFICATION:
+        return None
+
+    for priority_rank, setup_family in enumerate(SETUP_CLASSIFICATION_PRIORITY, start=1):
+        profile_enabled = setup_profile_enabled(setup_family)
+
+        if not profile_enabled:
+            continue
+
+        family_pass, family_reason = setup_family_specific_candidate_pass(
+            setup_family=setup_family,
+            row=row,
+            candidate=candidate,
+        )
+
+        if not family_pass:
+            continue
+
+        (
+            red_shift_floor_pass,
+            setup_trend_health_pass,
+            setup_extension_pass,
+        ) = setup_quality_passes(
+            setup_family=setup_family,
+            candidate=candidate,
+        )
+
+        if not red_shift_floor_pass:
+            continue
+
+        if not setup_trend_health_pass:
+            continue
+
+        if not setup_extension_pass:
+            continue
+
+        return ClassifiedContinuationCandidate(
+            candidate_time=candidate.candidate_time,
+            direction=candidate.direction,
+            setup_family=setup_family,
+            entry_price=candidate.entry_price,
+            reason=family_reason,
+            regime_label=candidate.regime_label,
+            red_shift_points=candidate.red_shift_points,
+            red_shift_label=candidate.red_shift_label,
+            trend_health_pass=candidate.trend_health_pass,
+            extension_from_green_points=candidate.extension_from_green_points,
+            close_through_green_points=candidate.close_through_green_points,
+            body_ratio=candidate.body_ratio,
+            setup_profile_enabled=profile_enabled,
+            red_shift_floor_pass=red_shift_floor_pass,
+            setup_trend_health_pass=setup_trend_health_pass,
+            setup_extension_pass=setup_extension_pass,
+            setup_family_priority_rank=priority_rank,
+        )
+
+    return None
+
+
+def classify_raw_continuation_candidates(
+    features_df: pd.DataFrame,
+    raw_candidates: list[RawContinuationCandidate],
+) -> list[ClassifiedContinuationCandidate]:
+    if not ENABLE_SETUP_CLASSIFICATION:
+        return []
+
+    row = latest_feature_row(features_df)
+
+    if row is None:
+        return []
+
+    classified_candidates: list[ClassifiedContinuationCandidate] = []
+
+    for candidate in raw_candidates:
+        classified_candidate = classify_raw_continuation_candidate(
+            row=row,
+            candidate=candidate,
+        )
+
+        if classified_candidate is not None:
+            classified_candidates.append(classified_candidate)
+
+    return classified_candidates
+
+
+def log_classified_continuation_candidate(
+    candidate: ClassifiedContinuationCandidate,
+) -> None:
+    if not LOG_SETUP_CLASSIFICATION:
+        return
+
+    log_event(
+        "CLASSIFIED_CONTINUATION_CANDIDATE",
+        signal_time=candidate.candidate_time,
+        direction=candidate.direction,
+        setup_family=candidate.setup_family,
+        entry_price=candidate.entry_price,
+        decision="classified_candidate_only",
+        classified_setup_family=candidate.setup_family,
+        classified_candidate_pass=True,
+        classified_candidate_reason=candidate.reason,
+        setup_profile_enabled=candidate.setup_profile_enabled,
+        setup_red_shift_floor_pass=candidate.red_shift_floor_pass,
+        setup_trend_health_pass=candidate.setup_trend_health_pass,
+        setup_extension_pass=candidate.setup_extension_pass,
+        setup_family_priority_rank=candidate.setup_family_priority_rank,
+        raw_candidate_regime=candidate.regime_label,
+        raw_candidate_red_shift_points=candidate.red_shift_points,
+        raw_candidate_red_shift_label=candidate.red_shift_label,
+        raw_candidate_trend_health_pass=candidate.trend_health_pass,
+        raw_candidate_extension_points=candidate.extension_from_green_points,
+        raw_candidate_close_through_green_points=candidate.close_through_green_points,
+        raw_candidate_body_ratio=candidate.body_ratio,
+        message="Raw continuation candidate classified by setup family; not executable yet",
+    )
+
+# ============================================================
 # SIGNAL PROCESSING SHELL
 # ============================================================
 
@@ -2384,6 +2692,14 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
     for candidate in raw_candidates:
         log_raw_continuation_candidate(candidate)
 
+    classified_candidates = classify_raw_continuation_candidates(
+        features_df=features_df,
+        raw_candidates=raw_candidates,
+    )
+
+    for candidate in classified_candidates:
+        log_classified_continuation_candidate(candidate)
+
     log_event(
         "HEARTBEAT",
         signal_time=latest_closed.name,
@@ -2395,8 +2711,9 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
         latest_long_trend_health=latest_feature_row.get("v2_long_trend_health_pass", ""),
         latest_short_trend_health=latest_feature_row.get("v2_short_trend_health_pass", ""),
         raw_candidate_count=len(raw_candidates),
-        decision="candidates_only",
-        message="Raw continuation candidates checked; no executable signal selection applied yet",
+        classified_candidate_count=len(classified_candidates),
+        decision="classified_candidates_only",
+        message="Raw continuation candidates classified; no executable signal selection applied yet",
     )
 
     return None
@@ -3495,6 +3812,23 @@ def validate_config() -> None:
         print("WARNING: LOG_RAW_CONTINUATION_CANDIDATES is True but raw candidate detection is disabled.")
         print("")
 
+    if ENABLE_SETUP_CLASSIFICATION and not ENABLE_RAW_CONTINUATION_CANDIDATES:
+        raise ValueError(
+            "ENABLE_SETUP_CLASSIFICATION requires ENABLE_RAW_CONTINUATION_CANDIDATES"
+        )
+
+    invalid_setup_priority = [
+        setup_family
+        for setup_family in SETUP_CLASSIFICATION_PRIORITY
+        if setup_family not in SETUP_PROFILES
+    ]
+
+    if invalid_setup_priority:
+        raise ValueError(
+            "Invalid setup family in SETUP_CLASSIFICATION_PRIORITY: "
+            + ", ".join(invalid_setup_priority)
+        )
+
     if EXECUTION_MODE not in valid_execution_modes:
         raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
 
@@ -3608,6 +3942,9 @@ def print_startup_config() -> None:
     print(f"- Require src feature engine: {REQUIRE_SRC_FEATURE_ENGINE}")
     print(f"- Enable raw continuation candidates: {ENABLE_RAW_CONTINUATION_CANDIDATES}")
     print(f"- Log raw continuation candidates: {LOG_RAW_CONTINUATION_CANDIDATES}")
+    print(f"- Enable setup classification: {ENABLE_SETUP_CLASSIFICATION}")
+    print(f"- Log setup classification: {LOG_SETUP_CLASSIFICATION}")
+    print(f"- Setup classification priority: {SETUP_CLASSIFICATION_PRIORITY}")
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
