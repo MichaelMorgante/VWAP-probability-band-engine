@@ -409,6 +409,13 @@ LOG_FIELDS = [
     "open_positions_count",
     "protected_addons_enabled",
     "max_open_continuation_trades",
+    "position_type",
+    "position_entry_price",
+    "position_sl",
+    "position_tp",
+    "position_profit",
+    "position_magic",
+    "positions_source",
     "message",
 ]
 
@@ -1238,14 +1245,86 @@ def is_inside_session_window(now: datetime | None = None) -> bool:
 
     return session_start_dt <= now_dt < session_end_dt
 
-def get_open_bot_positions_shell() -> list[Any]:
-    """
-    Placeholder for MT5 open-position lookup.
+def is_mt5_connected() -> bool:
+    if mt5 is None:
+        return False
 
-    Future order/position-management commits will replace this with live MT5
-    position filtering by SYMBOL and MAGIC_NUMBER.
+    return mt5.terminal_info() is not None
+
+
+def get_open_bot_positions() -> list[Any]:
     """
-    return []
+    Return open MT5 positions for this engine only.
+
+    Positions are filtered by:
+    - SYMBOL
+    - MAGIC_NUMBER
+
+    If MT5 is unavailable or not connected, return an empty list so signal-only
+    testing can still run without requiring a terminal connection.
+    """
+    if mt5 is None:
+        return []
+
+    if not is_mt5_connected():
+        return []
+
+    positions = mt5.positions_get(symbol=SYMBOL)
+
+    if positions is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message="Could not read open MT5 positions",
+        )
+
+        return []
+
+    bot_positions = [
+        position
+        for position in positions
+        if getattr(position, "magic", None) == MAGIC_NUMBER
+    ]
+
+    log_event(
+        "HEARTBEAT",
+        open_positions_count=len(bot_positions),
+        positions_source="mt5",
+        message=f"Open bot positions detected: {len(bot_positions)}",
+    )
+
+    return bot_positions
+
+def is_position_protected(position: Any) -> bool:
+    """
+    Protected means the stop loss has been moved to breakeven or better.
+
+    BUY:
+    - protected if SL >= entry
+
+    SELL:
+    - protected if SL <= entry
+    """
+    if mt5 is None:
+        return False
+
+    position_sl = float(getattr(position, "sl", 0.0) or 0.0)
+    position_entry = float(getattr(position, "price_open", 0.0) or 0.0)
+    position_type = getattr(position, "type", None)
+
+    if position_sl == 0.0:
+        return False
+
+    if position_type == mt5.POSITION_TYPE_BUY:
+        return position_sl >= position_entry
+
+    if position_type == mt5.POSITION_TYPE_SELL:
+        return position_sl <= position_entry
+
+    return False
 
 
 def can_open_new_continuation_trade(open_positions: list[Any]) -> tuple[bool, str]:
@@ -1261,7 +1340,10 @@ def can_open_new_continuation_trade(open_positions: list[Any]) -> tuple[bool, st
         return False, "Max open continuation trades reached"
 
     if REQUIRE_PRIMARY_PROTECTED_BEFORE_ADDON and open_positions_count > 0:
-        return False, "Protected add-on check is not implemented yet"
+        primary_position = open_positions[0]
+
+        if not is_position_protected(primary_position):
+            return False, "Primary trade is not protected at breakeven or better"
 
     return True, "Open-position rules passed"
 
@@ -1284,7 +1366,7 @@ def should_allow_new_entry_after_safety_gates(
     signal: TradeSignal,
     now: datetime | None = None,
 ) -> tuple[bool, str]:
-    open_positions = get_open_bot_positions_shell()
+    open_positions = get_open_bot_positions()
     open_positions_count = len(open_positions)
 
     if not is_inside_session_window(now):
@@ -1358,6 +1440,8 @@ def should_allow_new_entry_after_safety_gates(
     can_open, open_position_reason = can_open_new_continuation_trade(open_positions)
 
     if not can_open:
+        first_position = open_positions[0] if open_positions else None
+
         log_event(
             "SIGNAL_BLOCKED",
             signal_time=signal.signal_time,
@@ -1368,6 +1452,13 @@ def should_allow_new_entry_after_safety_gates(
             open_positions_count=open_positions_count,
             protected_addons_enabled=ENABLE_PROTECTED_ADDONS,
             max_open_continuation_trades=MAX_OPEN_CONTINUATION_TRADES,
+            position_type=getattr(first_position, "type", "") if first_position else "",
+            position_entry_price=getattr(first_position, "price_open", "") if first_position else "",
+            position_sl=getattr(first_position, "sl", "") if first_position else "",
+            position_tp=getattr(first_position, "tp", "") if first_position else "",
+            position_profit=getattr(first_position, "profit", "") if first_position else "",
+            position_magic=getattr(first_position, "magic", "") if first_position else "",
+            positions_source="mt5" if is_mt5_connected() else "none",
             message=open_position_reason,
         )
 
@@ -1643,6 +1734,8 @@ def main() -> None:
         if not ensure_symbol_selected():
             print("MT5 symbol selection failed. Check logs for details.")
             return
+        
+        get_open_bot_positions()
 
         if RUN_LIVE_LOOP_ON_STARTUP:
             run_engine_loop(bot_start_time)
