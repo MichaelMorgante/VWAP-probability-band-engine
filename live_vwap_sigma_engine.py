@@ -258,6 +258,18 @@ SETUP_CLASSIFICATION_PRIORITY = [
 # It does not promote candidates to executable TradeSignal objects.
 
 # ============================================================
+# SIGNAL PROMOTION CONFIG
+# ============================================================
+
+ENABLE_CONTINUATION_SIGNAL_PROMOTION = True
+LOG_SELECTED_CONTINUATION_SIGNAL = True
+
+CONTINUATION_SIGNAL_SELECTION_MODE = "priority_first"
+# options:
+# "priority_first" = choose the first classified candidate by setup priority
+# "strongest_red_shift" = choose the classified candidate with strongest red shift
+
+# ============================================================
 # CORE STRATEGY CONFIG
 # ============================================================
 
@@ -583,6 +595,10 @@ LOG_FIELDS = [
     "setup_trend_health_pass",
     "setup_extension_pass",
     "setup_family_priority_rank",
+    "selected_signal_setup_family",
+    "selected_signal_direction",
+    "selected_signal_reason",
+    "selected_signal_selection_mode",
     "message",
 ]
 
@@ -2657,6 +2673,106 @@ def log_classified_continuation_candidate(
     )
 
 # ============================================================
+# CONTINUATION SIGNAL PROMOTION
+# ============================================================
+
+def select_classified_continuation_candidate(
+    candidates: list[ClassifiedContinuationCandidate],
+) -> ClassifiedContinuationCandidate | None:
+    if not candidates:
+        return None
+
+    if CONTINUATION_SIGNAL_SELECTION_MODE == "priority_first":
+        return sorted(
+            candidates,
+            key=lambda candidate: candidate.setup_family_priority_rank,
+        )[0]
+
+    if CONTINUATION_SIGNAL_SELECTION_MODE == "strongest_red_shift":
+        return sorted(
+            candidates,
+            key=lambda candidate: candidate.red_shift_points,
+            reverse=True,
+        )[0]
+
+    raise ValueError(
+        f"Invalid CONTINUATION_SIGNAL_SELECTION_MODE: {CONTINUATION_SIGNAL_SELECTION_MODE}"
+    )
+
+
+def build_trade_signal_from_classified_candidate(
+    candidate: ClassifiedContinuationCandidate,
+) -> TradeSignal:
+    runner_target_r = get_runner_target_for_setup(candidate.setup_family)
+    runner_target_points = runner_target_r * SL_POINTS
+
+    sl_price, tp_price = build_sl_tp(
+        direction=candidate.direction,
+        entry_price=candidate.entry_price,
+    )
+
+    reason = (
+        f"{candidate.setup_family} {candidate.direction} continuation signal: "
+        f"{candidate.reason}; regime={candidate.regime_label}; "
+        f"red_shift={candidate.red_shift_points:.2f} "
+        f"({candidate.red_shift_label}); "
+        f"runner_target_r={runner_target_r:.2f}"
+    )
+
+    return TradeSignal(
+        signal_time=candidate.candidate_time,
+        direction=candidate.direction,
+        setup_family=candidate.setup_family,
+        entry_price=candidate.entry_price,
+        sl_price=sl_price,
+        tp_price=tp_price,
+        runner_target_r=runner_target_r,
+        runner_target_points=runner_target_points,
+        reason=reason,
+    )
+
+
+def log_selected_continuation_signal(signal: TradeSignal) -> None:
+    if not LOG_SELECTED_CONTINUATION_SIGNAL:
+        return
+
+    log_event(
+        "CONTINUATION_SIGNAL_SELECTED",
+        signal_time=signal.signal_time,
+        direction=signal.direction,
+        setup_family=signal.setup_family,
+        entry_price=signal.entry_price,
+        sl_price=signal.sl_price,
+        tp_price=signal.tp_price,
+        runner_target_r=signal.runner_target_r,
+        runner_target_points=signal.runner_target_points,
+        decision="selected_signal",
+        selected_signal_setup_family=signal.setup_family,
+        selected_signal_direction=signal.direction,
+        selected_signal_reason=signal.reason,
+        selected_signal_selection_mode=CONTINUATION_SIGNAL_SELECTION_MODE,
+        message="Classified continuation candidate promoted to TradeSignal",
+    )
+
+
+def promote_classified_candidates_to_signal(
+    candidates: list[ClassifiedContinuationCandidate],
+) -> TradeSignal | None:
+    if not ENABLE_CONTINUATION_SIGNAL_PROMOTION:
+        return None
+
+    selected_candidate = select_classified_continuation_candidate(candidates)
+
+    if selected_candidate is None:
+        return None
+
+    signal = build_trade_signal_from_classified_candidate(selected_candidate)
+
+    log_selected_continuation_signal(signal)
+
+    return signal
+
+# ============================================================
 # SIGNAL PROCESSING SHELL
 # ============================================================
 
@@ -2700,6 +2816,10 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
     for candidate in classified_candidates:
         log_classified_continuation_candidate(candidate)
 
+    selected_signal = promote_classified_candidates_to_signal(classified_candidates)
+
+    decision = "signal_selected" if selected_signal is not None else "no_signal"
+
     log_event(
         "HEARTBEAT",
         signal_time=latest_closed.name,
@@ -2712,11 +2832,15 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
         latest_short_trend_health=latest_feature_row.get("v2_short_trend_health_pass", ""),
         raw_candidate_count=len(raw_candidates),
         classified_candidate_count=len(classified_candidates),
-        decision="classified_candidates_only",
-        message="Raw continuation candidates classified; no executable signal selection applied yet",
+        selected_signal_setup_family=selected_signal.setup_family if selected_signal else "",
+        selected_signal_direction=selected_signal.direction if selected_signal else "",
+        selected_signal_reason=selected_signal.reason if selected_signal else "",
+        selected_signal_selection_mode=CONTINUATION_SIGNAL_SELECTION_MODE,
+        decision=decision,
+        message="Continuation signal promotion completed",
     )
 
-    return None
+    return selected_signal
 
 
 def log_signal_only(signal: TradeSignal) -> None:
@@ -3828,6 +3952,20 @@ def validate_config() -> None:
             "Invalid setup family in SETUP_CLASSIFICATION_PRIORITY: "
             + ", ".join(invalid_setup_priority)
         )
+    
+    if ENABLE_CONTINUATION_SIGNAL_PROMOTION and not ENABLE_SETUP_CLASSIFICATION:
+        raise ValueError(
+            "ENABLE_CONTINUATION_SIGNAL_PROMOTION requires ENABLE_SETUP_CLASSIFICATION"
+        )
+
+    if CONTINUATION_SIGNAL_SELECTION_MODE not in {
+        "priority_first",
+        "strongest_red_shift",
+    }:
+        raise ValueError(
+            "CONTINUATION_SIGNAL_SELECTION_MODE must be one of: "
+            "priority_first, strongest_red_shift"
+        )
 
     if EXECUTION_MODE not in valid_execution_modes:
         raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
@@ -3945,6 +4083,9 @@ def print_startup_config() -> None:
     print(f"- Enable setup classification: {ENABLE_SETUP_CLASSIFICATION}")
     print(f"- Log setup classification: {LOG_SETUP_CLASSIFICATION}")
     print(f"- Setup classification priority: {SETUP_CLASSIFICATION_PRIORITY}")
+    print(f"- Enable continuation signal promotion: {ENABLE_CONTINUATION_SIGNAL_PROMOTION}")
+    print(f"- Log selected continuation signal: {LOG_SELECTED_CONTINUATION_SIGNAL}")
+    print(f"- Continuation signal selection mode: {CONTINUATION_SIGNAL_SELECTION_MODE}")
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
