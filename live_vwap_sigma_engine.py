@@ -392,6 +392,16 @@ UNKNOWN_LOSS_DEAL_R = -1.0
 UNKNOWN_PROFIT_DEAL_R = 1.0
 # Used only when a closed MT5 deal cannot be matched to a stored trade state.
 
+# ============================================================
+# TRADE-STATE RECOVERY CONFIG
+# ============================================================
+
+LOAD_TRADE_STATES_ON_STARTUP = True
+PRUNE_STALE_TRADE_STATES = True
+LOG_TRADE_STATE_RECOVERY = True
+# Loads stored trade state from JSONL so restarts preserve setup family,
+# runner target, and trail state for open bot positions.
+
 
 # ============================================================
 # PROTECTED ADD-ON CONFIG
@@ -685,6 +695,12 @@ LOG_FIELDS = [
     "closed_trade_realised_r",
     "closed_trade_source",
     "processed_closed_deal_count",
+    "state_recovery_enabled",
+    "state_recovery_action",
+    "state_recovery_loaded_count",
+    "state_recovery_open_position_count",
+    "state_recovery_stale_count",
+    "state_recovery_error",
     "message",
 ]
 
@@ -3999,6 +4015,11 @@ def get_open_bot_positions() -> list[Any]:
         source="mt5_position_sync",
     )
 
+    prune_trade_states_to_open_positions(
+        positions=bot_positions,
+        source="mt5_position_sync",
+    )
+
     log_event(
         "HEARTBEAT",
         open_positions_count=len(bot_positions),
@@ -4511,6 +4532,210 @@ def reconcile_closed_trade_outcomes(
         max_consecutive_sl=MAX_CONSECUTIVE_SL,
         message=f"Closed trade reconciliation checked {len(bot_close_deals)} bot close deals",
     )
+
+# ============================================================
+# PERSISTED TRADE-STATE RECOVERY
+# ============================================================
+
+TRADE_STATE_REMOVAL_ACTIONS = {
+    "closed",
+    "stale_removed",
+}
+
+
+def build_trade_state_from_record(record: dict[str, Any]) -> LiveTradeState | None:
+    try:
+        return LiveTradeState(
+            ticket=int(record["ticket"]),
+            setup_family=str(record.get("setup_family", "UNKNOWN")),
+            direction=str(record.get("direction", "UNKNOWN")),
+            entry_price=float(record.get("entry_price", 0.0)),
+            sl_price=float(record.get("sl_price", 0.0)),
+            tp_price=float(record.get("tp_price", 0.0)),
+            runner_target_r=float(record.get("runner_target_r", RUNNER_TARGET_R)),
+            runner_target_points=float(
+                record.get(
+                    "runner_target_points",
+                    float(RUNNER_TARGET_R) * float(SL_POINTS),
+                )
+            ),
+            signal_time=record.get("signal_time", "recovered_from_state_log"),
+            trail_state=str(record.get("trail_state", "RECOVERED")),
+        )
+
+    except (KeyError, TypeError, ValueError) as exc:
+        log_event(
+            "ERROR",
+            state_recovery_enabled=LOAD_TRADE_STATES_ON_STARTUP,
+            state_recovery_action="record_parse_failed",
+            state_recovery_error=str(exc),
+            message="Could not parse trade-state recovery record",
+        )
+
+        return None
+
+
+def load_trade_states_from_log() -> int:
+    if not LOAD_TRADE_STATES_ON_STARTUP:
+        return 0
+
+    if not TRADE_STATE_LOG_PATH.exists():
+        log_event(
+            "TRADE_STATE",
+            state_recovery_enabled=LOAD_TRADE_STATES_ON_STARTUP,
+            state_recovery_action="log_missing",
+            state_recovery_loaded_count=0,
+            message="Trade-state log does not exist yet",
+        )
+
+        return 0
+
+    recovered_states: dict[int, LiveTradeState] = {}
+
+    with TRADE_STATE_LOG_PATH.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+
+            if not line:
+                continue
+
+            try:
+                record = json.loads(line)
+
+            except json.JSONDecodeError as exc:
+                log_event(
+                    "ERROR",
+                    state_recovery_enabled=LOAD_TRADE_STATES_ON_STARTUP,
+                    state_recovery_action="json_decode_failed",
+                    state_recovery_error=str(exc),
+                    message="Could not decode trade-state log line",
+                )
+                continue
+
+            state = build_trade_state_from_record(record)
+
+            if state is None:
+                continue
+
+            action = str(record.get("action", ""))
+
+            if action in TRADE_STATE_REMOVAL_ACTIONS:
+                recovered_states.pop(int(state.ticket), None)
+                continue
+
+            recovered_states[int(state.ticket)] = state
+
+    live_trade_states.update(recovered_states)
+
+    if LOG_TRADE_STATE_RECOVERY:
+        log_event(
+            "TRADE_STATE",
+            state_recovery_enabled=LOAD_TRADE_STATES_ON_STARTUP,
+            state_recovery_action="loaded_from_log",
+            state_recovery_loaded_count=len(recovered_states),
+            trade_state_open_count=len(live_trade_states),
+            message=f"Loaded {len(recovered_states)} trade states from log",
+        )
+
+    return len(recovered_states)
+
+
+def open_position_ticket_set(positions: list[Any]) -> set[int]:
+    tickets: set[int] = set()
+
+    for position in positions:
+        ticket = position_ticket_value(position)
+
+        if ticket is not None:
+            tickets.add(ticket)
+
+    return tickets
+
+
+def remove_stale_trade_state(
+    ticket: int,
+    state: LiveTradeState,
+    source: str,
+) -> None:
+    append_trade_state_record(
+        action="stale_removed",
+        state=state,
+        source=source,
+    )
+
+    live_trade_states.pop(ticket, None)
+
+    log_event(
+        "TRADE_STATE",
+        signal_time=state.signal_time,
+        direction=state.direction,
+        setup_family=state.setup_family,
+        position_ticket=state.ticket,
+        trade_state_action="stale_removed",
+        trade_state_ticket=state.ticket,
+        trade_state_setup_family=state.setup_family,
+        trade_state_direction=state.direction,
+        trade_state_trail_state=state.trail_state,
+        trade_state_source=source,
+        trade_state_open_count=len(live_trade_states),
+        state_recovery_enabled=LOAD_TRADE_STATES_ON_STARTUP,
+        state_recovery_action="stale_removed",
+        message=f"Removed stale trade state: ticket={ticket}",
+    )
+
+
+def prune_trade_states_to_open_positions(
+    positions: list[Any],
+    source: str = "open_position_sync",
+) -> int:
+    if not PRUNE_STALE_TRADE_STATES:
+        return 0
+
+    open_tickets = open_position_ticket_set(positions)
+    stale_tickets = [
+        ticket
+        for ticket in list(live_trade_states.keys())
+        if ticket not in open_tickets
+    ]
+
+    for ticket in stale_tickets:
+        state = live_trade_states.get(ticket)
+
+        if state is None:
+            continue
+
+        remove_stale_trade_state(
+            ticket=ticket,
+            state=state,
+            source=source,
+        )
+
+    if LOG_TRADE_STATE_RECOVERY:
+        log_event(
+            "TRADE_STATE",
+            state_recovery_enabled=LOAD_TRADE_STATES_ON_STARTUP,
+            state_recovery_action="pruned_to_open_positions",
+            state_recovery_open_position_count=len(open_tickets),
+            state_recovery_stale_count=len(stale_tickets),
+            trade_state_open_count=len(live_trade_states),
+            message=f"Pruned {len(stale_tickets)} stale trade states",
+        )
+
+    return len(stale_tickets)
+
+
+def recover_trade_states_on_startup() -> None:
+    loaded_count = load_trade_states_from_log()
+
+    if LOG_TRADE_STATE_RECOVERY:
+        log_event(
+            "TRADE_STATE",
+            state_recovery_enabled=LOAD_TRADE_STATES_ON_STARTUP,
+            state_recovery_action="startup_recovery_completed",
+            state_recovery_loaded_count=loaded_count,
+            trade_state_open_count=len(live_trade_states),
+            message="Trade-state startup recovery completed",
+        )
 
 # ============================================================
 # ORDER EXECUTION HELPERS
@@ -5216,6 +5441,11 @@ def validate_config() -> None:
 
     if UNKNOWN_PROFIT_DEAL_R <= 0:
         raise ValueError("UNKNOWN_PROFIT_DEAL_R must be positive")
+    
+    if LOAD_TRADE_STATES_ON_STARTUP and not TRADE_STATE_LOG_PATH.parent.exists():
+        raise ValueError(
+            f"Trade-state log directory does not exist: {TRADE_STATE_LOG_PATH.parent}"
+        )
 
     if REQUIRE_TRADE_STATE_FOR_POSITION_MANAGEMENT and not ENABLE_POSITION_MANAGEMENT:
         pass
@@ -5342,6 +5572,9 @@ def print_startup_config() -> None:
         "- Closed trade reconciliation lookback hours: "
         f"{CLOSED_TRADE_RECONCILIATION_LOOKBACK_HOURS}"
     )
+    print(f"- Load trade states on startup: {LOAD_TRADE_STATES_ON_STARTUP}")
+    print(f"- Prune stale trade states: {PRUNE_STALE_TRADE_STATES}")
+    print(f"- Log trade-state recovery: {LOG_TRADE_STATE_RECOVERY}")
     print(f"- Loss R threshold for SL count: {LOSS_R_THRESHOLD_FOR_SL_COUNT}")
     print(f"- Log position management decisions: {LOG_POSITION_MANAGEMENT_DECISIONS}")
     print(f"- Minimum SL update distance points: {MIN_SL_UPDATE_DISTANCE_POINTS}")
@@ -5450,9 +5683,10 @@ def main() -> None:
         if not ensure_symbol_selected():
             print("MT5 symbol selection failed. Check logs for details.")
             return
-        
-        get_open_bot_positions()
 
+        recover_trade_states_on_startup()
+
+        get_open_bot_positions()
         if RUN_LIVE_LOOP_ON_STARTUP:
             run_engine_loop(bot_start_time)
         else:
