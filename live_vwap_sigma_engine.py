@@ -14,6 +14,8 @@ This script is designed to:
 from __future__ import annotations
 
 import csv
+import importlib
+import sys
 import time as time_module
 from dataclasses import dataclass, asdict
 from datetime import datetime, time, timedelta, timezone
@@ -22,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import numpy as np
 import pandas as pd
 
 try:
@@ -82,6 +85,16 @@ MT5_SERVER = None
 MT5_TIMEOUT_MS = 60_000
 MT5_PORTABLE_MODE = False
 
+# ============================================================
+# SOURCE MODEL CONFIG
+# ============================================================
+
+USE_SRC_FEATURE_ENGINE = True
+RELOAD_SRC_MODULES_ON_STARTUP = False
+REQUIRE_SRC_FEATURE_ENGINE = True
+# True = use the existing src VWAP/band/z-score engine.
+# False = skip src feature calculation and keep the live shell running.
+
 ORDER_DEVIATION_POINTS = 20
 ORDER_FILLING_MODE = "IOC"
 # options:
@@ -90,7 +103,6 @@ ORDER_FILLING_MODE = "IOC"
 # "RETURN" = return remainder if supported by broker
 
 CLOSE_IF_SL_MISSING_AFTER_FILL = True
-
 
 # ============================================================
 # SESSION / TIME CONFIG
@@ -430,6 +442,13 @@ LOG_FIELDS = [
     "order_volume",
     "order_comment",
     "close_reason",
+    "project_root",
+    "src_feature_engine_enabled",
+    "src_import_status",
+    "src_import_error",
+    "feature_rows",
+    "latest_feature_time",
+    "missing_feature_columns",
     "message",
 ]
 
@@ -835,6 +854,357 @@ def get_latest_closed_candle(candles: pd.DataFrame) -> pd.Series | None:
     return closed_candles.iloc[-1]
 
 # ============================================================
+# SOURCE MODEL FEATURE ADAPTER
+# ============================================================
+
+REQUIRED_ENGINE_OUTPUT_COLUMNS = [
+    "datetime",
+    "open",
+    "high",
+    "low",
+    "close",
+    "vwap",
+    "upper_green",
+    "upper_orange",
+    "upper_red",
+    "lower_green",
+    "lower_orange",
+    "lower_red",
+]
+
+
+ENGINE_COLUMN_ALIASES = {
+    "vwap": ["vwap", "VWAP", "reference", "ref", "reference_line"],
+    "upper_green": [
+        "upper_green",
+        "upper_1",
+        "upper_band_1",
+        "band_1p",
+        "band_1_plus",
+        "band_1+",
+        "z1_upper",
+        "upper_sigma_1",
+    ],
+    "upper_orange": [
+        "upper_orange",
+        "upper_2",
+        "upper_band_2",
+        "band_2p",
+        "band_2_plus",
+        "band_2+",
+        "z2_upper",
+        "upper_sigma_2",
+    ],
+    "upper_red": [
+        "upper_red",
+        "upper_3",
+        "upper_band_3",
+        "band_3p",
+        "band_3_plus",
+        "band_3+",
+        "z3_upper",
+        "upper_sigma_3",
+    ],
+    "lower_green": [
+        "lower_green",
+        "lower_1",
+        "lower_band_1",
+        "band_1n",
+        "band_1m",
+        "band_1_minus",
+        "band_1-",
+        "z1_lower",
+        "lower_sigma_1",
+    ],
+    "lower_orange": [
+        "lower_orange",
+        "lower_2",
+        "lower_band_2",
+        "band_2n",
+        "band_2m",
+        "band_2_minus",
+        "band_2-",
+        "z2_lower",
+        "lower_sigma_2",
+    ],
+    "lower_red": [
+        "lower_red",
+        "lower_3",
+        "lower_band_3",
+        "band_3n",
+        "band_3m",
+        "band_3_minus",
+        "band_3-",
+        "z3_lower",
+        "lower_sigma_3",
+    ],
+}
+
+
+_src_feature_engine_cache: dict[str, Any] | None = None
+
+
+def find_project_root(start_path: Path | None = None) -> Path:
+    if start_path is None:
+        start_path = Path(__file__).resolve().parent
+
+    start_path = start_path.resolve()
+
+    for path in [start_path, *start_path.parents]:
+        has_src = (path / "src").is_dir()
+        has_repo_marker = (
+            (path / ".git").exists()
+            or (path / "README.md").exists()
+            or (path / "requirements.txt").exists()
+        )
+
+        if has_src and has_repo_marker:
+            return path
+
+    raise FileNotFoundError(
+        "Could not find the project root. Run this script from inside the "
+        "VWAP-probability-band-engine project folder."
+    )
+
+
+def ensure_project_import_path() -> Path:
+    project_root = find_project_root()
+
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    return project_root
+
+
+def import_src_feature_engine() -> dict[str, Any]:
+    global _src_feature_engine_cache
+
+    if _src_feature_engine_cache is not None and not RELOAD_SRC_MODULES_ON_STARTUP:
+        return _src_feature_engine_cache
+
+    project_root = ensure_project_import_path()
+
+    try:
+        import src.config as engine_config_module
+        import src.reference as reference_module
+        import src.sigma as sigma_module
+        import src.zones as zones_module
+
+        if RELOAD_SRC_MODULES_ON_STARTUP:
+            engine_config_module = importlib.reload(engine_config_module)
+            reference_module = importlib.reload(reference_module)
+            sigma_module = importlib.reload(sigma_module)
+            zones_module = importlib.reload(zones_module)
+
+        engine = {
+            "project_root": project_root,
+            "engine_config": dict(engine_config_module.CONFIG),
+            "compute_reference": reference_module.compute_reference,
+            "compute_sigma": sigma_module.compute_sigma,
+            "compute_bands": sigma_module.compute_bands,
+            "compute_zscore": zones_module.compute_zscore,
+            "classify_zones_series": zones_module.classify_zones_series,
+        }
+
+        _src_feature_engine_cache = engine
+
+        log_event(
+            "HEARTBEAT",
+            project_root=str(project_root),
+            src_feature_engine_enabled=USE_SRC_FEATURE_ENGINE,
+            src_import_status="ok",
+            message="Existing src VWAP feature engine loaded",
+        )
+
+        return engine
+
+    except Exception as exc:
+        log_event(
+            "ERROR",
+            project_root=str(project_root),
+            src_feature_engine_enabled=USE_SRC_FEATURE_ENGINE,
+            src_import_status="failed",
+            src_import_error=str(exc),
+            message="Could not load existing src VWAP feature engine",
+        )
+
+        if REQUIRE_SRC_FEATURE_ENGINE:
+            raise
+
+        return {}
+
+
+def build_live_engine_config() -> dict[str, Any]:
+    src_engine = import_src_feature_engine()
+    engine_config = dict(src_engine.get("engine_config", {}))
+
+    engine_config["session_timezone"] = TRADING_TIMEZONE
+
+    return engine_config
+
+
+def find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+
+    lower_map = {str(col).lower(): col for col in df.columns}
+
+    for candidate in candidates:
+        matched = lower_map.get(candidate.lower())
+
+        if matched is not None:
+            return matched
+
+    return None
+
+
+def add_engine_band_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    for standard_name, aliases in ENGINE_COLUMN_ALIASES.items():
+        if standard_name in out.columns:
+            continue
+
+        matched_column = find_column(out, aliases)
+
+        if matched_column is not None:
+            out[standard_name] = out[matched_column]
+
+    return out
+
+
+def validate_engine_output_columns(df: pd.DataFrame) -> None:
+    missing = [column for column in REQUIRED_ENGINE_OUTPUT_COLUMNS if column not in df.columns]
+
+    if missing:
+        log_event(
+            "ERROR",
+            missing_feature_columns=", ".join(missing),
+            message="Missing required VWAP feature output columns",
+        )
+
+        raise ValueError(
+            "Missing required VWAP feature output columns: "
+            + ", ".join(missing)
+        )
+
+
+def prepare_candles_for_src_engine(candles: pd.DataFrame) -> pd.DataFrame:
+    if candles is None or candles.empty:
+        return pd.DataFrame()
+
+    out = candles.copy()
+
+    if isinstance(out.index, pd.DatetimeIndex):
+        out = out.reset_index()
+
+    if "time" in out.columns and "datetime" not in out.columns:
+        out = out.rename(columns={"time": "datetime"})
+
+    if "index" in out.columns and "datetime" not in out.columns:
+        out = out.rename(columns={"index": "datetime"})
+
+    required_ohlc = ["datetime", "open", "high", "low", "close"]
+    missing_ohlc = [column for column in required_ohlc if column not in out.columns]
+
+    if missing_ohlc:
+        raise ValueError(
+            "Missing required OHLC columns for src feature engine: "
+            + ", ".join(missing_ohlc)
+        )
+
+    out["datetime"] = pd.to_datetime(out["datetime"], utc=True, errors="coerce")
+    out = out.dropna(subset=["datetime"]).sort_values("datetime").reset_index(drop=True)
+
+    for column in ["open", "high", "low", "close"]:
+        out[column] = pd.to_numeric(out[column], errors="coerce")
+
+    if "tick_volume" not in out.columns:
+        out["tick_volume"] = 1.0
+
+    out["tick_volume"] = (
+        pd.to_numeric(out["tick_volume"], errors="coerce")
+        .fillna(1.0)
+        .clip(lower=1.0)
+    )
+
+    out["typical_price"] = (out["high"] + out["low"] + out["close"]) / 3.0
+    out["session_date"] = out["datetime"].dt.tz_convert(TRADING_TIMEZONE).dt.date
+
+    return out
+
+
+def compute_live_feature_context(candles: pd.DataFrame) -> pd.DataFrame:
+    if not USE_SRC_FEATURE_ENGINE:
+        log_event(
+            "HEARTBEAT",
+            src_feature_engine_enabled=USE_SRC_FEATURE_ENGINE,
+            message="src feature engine disabled; skipping VWAP feature context",
+        )
+
+        return candles.copy()
+
+    src_engine = import_src_feature_engine()
+    engine_config = build_live_engine_config()
+
+    df = prepare_candles_for_src_engine(candles)
+
+    if df.empty:
+        log_event(
+            "ERROR",
+            src_feature_engine_enabled=USE_SRC_FEATURE_ENGINE,
+            message="No candles available for VWAP feature calculation",
+        )
+
+        return df
+
+    compute_reference = src_engine["compute_reference"]
+    compute_sigma = src_engine["compute_sigma"]
+    compute_bands = src_engine["compute_bands"]
+    compute_zscore = src_engine["compute_zscore"]
+    classify_zones_series = src_engine["classify_zones_series"]
+
+    df["reference"] = compute_reference(df, engine_config)
+    df["price_deviation"] = df["close"] - df["reference"]
+
+    df["sigma"] = compute_sigma(df, engine_config)
+
+    bands = compute_bands(df, df["sigma"])
+    df = pd.concat([df, bands], axis=1)
+
+    df["z_score"] = compute_zscore(df)
+    df["zone"] = classify_zones_series(
+        df["z_score"],
+        engine_config["zone_thresholds"],
+    )
+
+    df = add_engine_band_aliases(df)
+
+    df["candle_range"] = df["high"] - df["low"]
+    df["candle_body"] = (df["close"] - df["open"]).abs()
+    df["body_ratio"] = np.where(
+        df["candle_range"] > 0,
+        df["candle_body"] / df["candle_range"],
+        0.0,
+    )
+
+    validate_engine_output_columns(df)
+
+    latest_feature_time = df["datetime"].iloc[-1] if not df.empty else ""
+
+    log_event(
+        "HEARTBEAT",
+        src_feature_engine_enabled=USE_SRC_FEATURE_ENGINE,
+        src_import_status="ok",
+        feature_rows=len(df),
+        latest_feature_time=latest_feature_time,
+        message=f"Built VWAP feature context with {len(df)} rows",
+    )
+
+    return df
+
+# ============================================================
 # SIGNAL PROCESSING SHELL
 # ============================================================
 
@@ -844,16 +1214,34 @@ def normalise_signal_time(signal_time: Any) -> str:
 
 def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
     """
-    Placeholder for the notebook strategy port.
+    Build live VWAP feature context from confirmed candles.
 
-    Future commits will replace this shell with VWAP/bands/regime/setup logic.
-    For now, it intentionally returns None so Commit 4 cannot create signals
-    or place orders.
+    Entry selection is still added separately. This function currently computes
+    the model context and returns no signal.
     """
     latest_closed = get_latest_closed_candle(candles)
 
     if latest_closed is None:
         return None
+
+    closed_candles = get_closed_candles(candles)
+
+    if closed_candles.empty:
+        return None
+
+    features_df = compute_live_feature_context(closed_candles)
+
+    if features_df.empty:
+        return None
+
+    log_event(
+        "HEARTBEAT",
+        signal_time=latest_closed.name,
+        feature_rows=len(features_df),
+        latest_feature_time=features_df["datetime"].iloc[-1],
+        decision="features_only",
+        message="VWAP feature context built; no entry selection applied yet",
+    )
 
     return None
 
@@ -1917,6 +2305,11 @@ def validate_config() -> None:
         "follow_v2_activation",
     }
 
+    if REQUIRE_SRC_FEATURE_ENGINE and not USE_SRC_FEATURE_ENGINE:
+        raise ValueError(
+            "REQUIRE_SRC_FEATURE_ENGINE cannot be True when USE_SRC_FEATURE_ENGINE is False"
+        )
+
     if EXECUTION_MODE not in valid_execution_modes:
         raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
 
@@ -2003,6 +2396,9 @@ def validate_config() -> None:
             raise ValueError(
                 f"Invalid trend_health_mode for {setup_family}: {trend_health_mode}"
             )
+        
+    if USE_SRC_FEATURE_ENGINE and CONNECT_MT5_ON_STARTUP:
+        import_src_feature_engine()
 
     if EXECUTION_MODE == "place_orders":
         print("")
@@ -2022,6 +2418,9 @@ def print_startup_config() -> None:
     print(f"- MT5 terminal path: {MT5_TERMINAL_PATH}")
     print(f"- MT5 login configured: {MT5_LOGIN is not None}")
     print(f"- MT5 server configured: {MT5_SERVER is not None}")
+    print(f"- Use src feature engine: {USE_SRC_FEATURE_ENGINE}")
+    print(f"- Reload src modules on startup: {RELOAD_SRC_MODULES_ON_STARTUP}")
+    print(f"- Require src feature engine: {REQUIRE_SRC_FEATURE_ENGINE}")
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
