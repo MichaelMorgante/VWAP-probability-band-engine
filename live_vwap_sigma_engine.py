@@ -14,6 +14,7 @@ This script is designed to:
 from __future__ import annotations
 
 import csv
+import time as time_module
 from dataclasses import dataclass, asdict
 from datetime import datetime, time, timedelta, timezone
 from math import ceil
@@ -51,6 +52,10 @@ ORDER_COMMENT = "VWAP_SIGMA_CONT"
 
 POLL_SECONDS = 1
 CANDLE_CONFIRMATION_DELAY_SECONDS = 2
+
+RUN_LIVE_LOOP_ON_STARTUP = False
+# False = connect, fetch candles, process one latest closed candle, then exit.
+# True  = continuously poll MT5 and process each new closed candle once.
 
 ALLOW_LIVE_TRADING = False
 # False should prevent accidental live-account trading if account type can be detected.
@@ -389,6 +394,10 @@ LOG_FIELDS = [
     "account_server",
     "account_trade_mode",
     "account_company",
+    "latest_closed_time",
+    "last_processed_signal_time",
+    "last_ordered_signal_time",
+    "loop_iteration",
     "message",
 ]
 
@@ -423,6 +432,14 @@ class LiveTradeState:
     runner_target_points: float
     signal_time: Any
     trail_state: str = "OPEN"
+
+# ============================================================
+# RUNTIME STATE
+# ============================================================
+
+last_processed_signal_time: str | None = None
+last_ordered_signal_time: str | None = None
+loop_iteration = 0
 
 
 # ============================================================
@@ -780,6 +797,240 @@ def get_latest_closed_candle(candles: pd.DataFrame) -> pd.Series | None:
 
     return closed_candles.iloc[-1]
 
+# ============================================================
+# SIGNAL PROCESSING SHELL
+# ============================================================
+
+def normalise_signal_time(signal_time: Any) -> str:
+    return pd.Timestamp(signal_time).isoformat()
+
+
+def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
+    """
+    Placeholder for the notebook strategy port.
+
+    Future commits will replace this shell with VWAP/bands/regime/setup logic.
+    For now, it intentionally returns None so Commit 4 cannot create signals
+    or place orders.
+    """
+    latest_closed = get_latest_closed_candle(candles)
+
+    if latest_closed is None:
+        return None
+
+    return None
+
+
+def log_signal_only(signal: TradeSignal) -> None:
+    event_type = "SIGNAL_BUY" if signal.direction == "BUY" else "SIGNAL_SELL"
+
+    log_event(
+        event_type,
+        signal_time=signal.signal_time,
+        direction=signal.direction,
+        setup_family=signal.setup_family,
+        entry_price=signal.entry_price,
+        sl_price=signal.sl_price,
+        tp_price=signal.tp_price,
+        runner_target_r=signal.runner_target_r,
+        runner_target_points=signal.runner_target_points,
+        decision="signal_only",
+        message="Signal only mode: no order sent",
+    )
+
+
+def handle_signal(
+    signal: TradeSignal,
+    bot_start_time: datetime,
+    closed_candles: pd.DataFrame,
+    now: datetime | None = None,
+) -> None:
+    global last_ordered_signal_time
+
+    allow_entry, block_reason = should_allow_new_entry_after_startup_checks(
+        signal_time=signal.signal_time,
+        bot_start_time=bot_start_time,
+        candles=closed_candles,
+        now=now,
+    )
+
+    if not allow_entry:
+        return
+
+    if EXECUTION_MODE == "signal_only":
+        log_signal_only(signal)
+        return
+
+    if EXECUTION_MODE == "place_orders":
+        signal_time_key = normalise_signal_time(signal.signal_time)
+
+        if signal_time_key == last_ordered_signal_time:
+            log_event(
+                "SIGNAL_BLOCKED",
+                signal_time=signal.signal_time,
+                direction=signal.direction,
+                setup_family=signal.setup_family,
+                block_reason="Duplicate order blocked for same candle",
+                last_ordered_signal_time=last_ordered_signal_time,
+                message="Duplicate order blocked for same candle",
+            )
+            return
+
+        log_event(
+            "SIGNAL_BLOCKED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            entry_price=signal.entry_price,
+            sl_price=signal.sl_price,
+            tp_price=signal.tp_price,
+            runner_target_r=signal.runner_target_r,
+            runner_target_points=signal.runner_target_points,
+            decision="blocked",
+            block_reason="Order placement is not implemented yet",
+            message="Signal passed shell checks, but order placement is not implemented yet",
+        )
+
+        last_ordered_signal_time = signal_time_key
+        return
+
+    raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
+
+
+def process_latest_closed_candle(
+    candles: pd.DataFrame,
+    bot_start_time: datetime,
+    now: datetime | None = None,
+) -> None:
+    global last_processed_signal_time
+
+    latest_closed = get_latest_closed_candle(candles)
+
+    if latest_closed is None:
+        log_event(
+            "HEARTBEAT",
+            message="No closed candle available yet",
+        )
+        return
+
+    signal_time = latest_closed.name
+    signal_time_key = normalise_signal_time(signal_time)
+
+    if signal_time_key == last_processed_signal_time:
+        return
+
+    last_processed_signal_time = signal_time_key
+
+    closed_candles = get_closed_candles(candles)
+
+    warmup_ok, warmup_message = has_enough_warmup(closed_candles)
+
+    log_event(
+        "HEARTBEAT" if warmup_ok else "WARMUP_WAIT",
+        signal_time=signal_time,
+        latest_closed_time=signal_time,
+        candles_loaded=len(closed_candles),
+        min_warmup_candles=MIN_WARMUP_CANDLES,
+        history_lookback_minutes=HISTORY_LOOKBACK_MINUTES,
+        require_full_lookback_before_trading=REQUIRE_FULL_LOOKBACK_BEFORE_TRADING,
+        last_processed_signal_time=last_processed_signal_time,
+        message=warmup_message,
+    )
+
+    if not warmup_ok:
+        return
+
+    signal = build_signal_from_live_context(candles)
+
+    if signal is None:
+        log_event(
+            "HEARTBEAT",
+            signal_time=signal_time,
+            latest_closed_time=signal_time,
+            decision="no_signal",
+            last_processed_signal_time=last_processed_signal_time,
+            message="Closed candle processed; no signal generated by shell",
+        )
+        return
+
+    handle_signal(
+        signal=signal,
+        bot_start_time=bot_start_time,
+        closed_candles=closed_candles,
+        now=now,
+    )
+
+
+# ============================================================
+# ENGINE LOOP
+# ============================================================
+
+def manage_open_positions_shell() -> None:
+    """
+    Placeholder for future position management.
+
+    This will later manage breakeven, trailing stops, runner targets,
+    protected add-ons, and safety exits.
+    """
+    return
+
+
+def run_single_engine_cycle(bot_start_time: datetime) -> None:
+    global loop_iteration
+
+    loop_iteration += 1
+
+    candles = fetch_recent_candles()
+
+    if candles.empty:
+        log_event(
+            "ERROR",
+            loop_iteration=loop_iteration,
+            message="No candles loaded during engine cycle",
+        )
+        return
+
+    manage_open_positions_shell()
+
+    process_latest_closed_candle(
+        candles=candles,
+        bot_start_time=bot_start_time,
+    )
+
+    latest_closed = get_latest_closed_candle(candles)
+
+    if latest_closed is not None:
+        print(f"Latest closed candle: {latest_closed.name}")
+        print(
+            "OHLC: "
+            f"{latest_closed['open']} / "
+            f"{latest_closed['high']} / "
+            f"{latest_closed['low']} / "
+            f"{latest_closed['close']}"
+        )
+
+
+def run_engine_loop(bot_start_time: datetime) -> None:
+    log_event(
+        "HEARTBEAT",
+        message="Live engine loop started",
+    )
+
+    try:
+        while True:
+            if CANDLE_CONFIRMATION_DELAY_SECONDS > 0:
+                time_module.sleep(CANDLE_CONFIRMATION_DELAY_SECONDS)
+
+            run_single_engine_cycle(bot_start_time)
+
+            time_module.sleep(POLL_SECONDS)
+
+    except KeyboardInterrupt:
+        log_event(
+            "HEARTBEAT",
+            message="Live engine loop stopped by user",
+        )
+
 
 # ============================================================
 # CONFIG HELPERS
@@ -1003,6 +1254,12 @@ def validate_config() -> None:
 
     if LOT_SIZE <= 0:
         raise ValueError("LOT_SIZE must be > 0")
+    
+    if POLL_SECONDS <= 0:
+        raise ValueError("POLL_SECONDS must be > 0")
+
+    if CANDLE_CONFIRMATION_DELAY_SECONDS < 0:
+        raise ValueError("CANDLE_CONFIRMATION_DELAY_SECONDS must be >= 0")
 
     if RUNNER_TARGET_R <= 0:
         raise ValueError("RUNNER_TARGET_R must be > 0")
@@ -1072,6 +1329,9 @@ def print_startup_config() -> None:
     print(f"- MT5 terminal path: {MT5_TERMINAL_PATH}")
     print(f"- MT5 login configured: {MT5_LOGIN is not None}")
     print(f"- MT5 server configured: {MT5_SERVER is not None}")
+    print(f"- Run live loop on startup: {RUN_LIVE_LOOP_ON_STARTUP}")
+    print(f"- Poll seconds: {POLL_SECONDS}")
+    print(f"- Candle confirmation delay seconds: {CANDLE_CONFIRMATION_DELAY_SECONDS}")
     print(f"- Execution mode: {EXECUTION_MODE}")
     print(f"- Engine mode: {ENGINE_MODE}")
     print(f"- Strategy filter: {USE_STRATEGY_FILTER}")
@@ -1168,34 +1428,11 @@ def main() -> None:
             print("MT5 symbol selection failed. Check logs for details.")
             return
 
-        candles = fetch_recent_candles()
-        closed_candles = get_closed_candles(candles)
-
-        warmup_ok, warmup_message = has_enough_warmup(closed_candles)
-
-        log_event(
-            "HEARTBEAT" if warmup_ok else "WARMUP_WAIT",
-            candles_loaded=len(closed_candles),
-            min_warmup_candles=MIN_WARMUP_CANDLES,
-            history_lookback_minutes=HISTORY_LOOKBACK_MINUTES,
-            require_full_lookback_before_trading=REQUIRE_FULL_LOOKBACK_BEFORE_TRADING,
-            timeframe=TIMEFRAME,
-            message=warmup_message,
-        )
-
-        latest_closed = get_latest_closed_candle(candles)
-
-        if latest_closed is not None:
-            print(f"Latest closed candle: {latest_closed.name}")
-            print(
-                "OHLC: "
-                f"{latest_closed['open']} / "
-                f"{latest_closed['high']} / "
-                f"{latest_closed['low']} / "
-                f"{latest_closed['close']}"
-            )
-
-        print("MT5 connection and candle loading checks completed.")
+        if RUN_LIVE_LOOP_ON_STARTUP:
+            run_engine_loop(bot_start_time)
+        else:
+            run_single_engine_cycle(bot_start_time)
+            print("Single closed-candle processing cycle completed.")
 
     finally:
         shutdown_mt5()
