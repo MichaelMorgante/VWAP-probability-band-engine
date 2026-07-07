@@ -114,6 +114,12 @@ ORDER_FILLING_MODE = "IOC"
 
 CLOSE_IF_SL_MISSING_AFTER_FILL = True
 
+ENFORCE_MT5_SYMBOL_TRADE_CONSTRAINTS = True
+# True = validate broker symbol constraints before sending orders.
+# Checks volume min/max/step, trade mode, direction permissions, and SL/TP distance.
+
+LOG_MT5_SYMBOL_CONSTRAINTS = True
+
 # ============================================================
 # SESSION / TIME CONFIG
 # ============================================================
@@ -716,6 +722,15 @@ LOG_FIELDS = [
     "order_execution_armed",
     "order_execution_confirmation_ok",
     "order_execution_guard_reason",
+    "symbol_trade_mode",
+    "symbol_volume_min",
+    "symbol_volume_max",
+    "symbol_volume_step",
+    "symbol_point",
+    "symbol_trade_stops_level",
+    "symbol_trade_freeze_level",
+    "symbol_constraints_pass",
+    "symbol_constraints_reason",
     "message",
 ]
 
@@ -4907,6 +4922,203 @@ def order_execution_guard() -> tuple[bool, str]:
 
     return True, "Order execution guard passed"
 
+def symbol_trade_mode_label(trade_mode: Any) -> str:
+    require_mt5()
+
+    labels = {
+        mt5.SYMBOL_TRADE_MODE_DISABLED: "DISABLED",
+        mt5.SYMBOL_TRADE_MODE_LONGONLY: "LONG_ONLY",
+        mt5.SYMBOL_TRADE_MODE_SHORTONLY: "SHORT_ONLY",
+        mt5.SYMBOL_TRADE_MODE_CLOSEONLY: "CLOSE_ONLY",
+        mt5.SYMBOL_TRADE_MODE_FULL: "FULL",
+    }
+
+    return labels.get(trade_mode, f"UNKNOWN_{trade_mode}")
+
+
+def get_symbol_info_dict() -> dict[str, Any] | None:
+    require_mt5()
+
+    symbol_info = mt5.symbol_info(SYMBOL)
+
+    if symbol_info is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            symbol_constraints_pass=False,
+            symbol_constraints_reason=f"Symbol info unavailable for {SYMBOL}",
+            message=f"Symbol info unavailable for {SYMBOL}",
+        )
+
+        return None
+
+    return symbol_info._asdict()
+
+
+def volume_step_aligned(
+    volume: float,
+    volume_min: float,
+    volume_step: float,
+) -> bool:
+    if volume_step <= 0:
+        return True
+
+    steps = round((volume - volume_min) / volume_step)
+    aligned_volume = volume_min + (steps * volume_step)
+
+    return abs(volume - aligned_volume) < 1e-8
+
+
+def validate_symbol_volume_constraints(
+    symbol_info: dict[str, Any],
+) -> tuple[bool, str]:
+    volume_min = float(symbol_info.get("volume_min", 0.0) or 0.0)
+    volume_max = float(symbol_info.get("volume_max", 0.0) or 0.0)
+    volume_step = float(symbol_info.get("volume_step", 0.0) or 0.0)
+
+    if volume_min > 0 and LOT_SIZE < volume_min:
+        return False, f"LOT_SIZE below symbol volume_min: {LOT_SIZE} < {volume_min}"
+
+    if volume_max > 0 and LOT_SIZE > volume_max:
+        return False, f"LOT_SIZE above symbol volume_max: {LOT_SIZE} > {volume_max}"
+
+    if volume_step > 0 and not volume_step_aligned(
+        volume=float(LOT_SIZE),
+        volume_min=volume_min,
+        volume_step=volume_step,
+    ):
+        return False, (
+            f"LOT_SIZE is not aligned to volume_step: "
+            f"LOT_SIZE={LOT_SIZE}, min={volume_min}, step={volume_step}"
+        )
+
+    return True, "Volume constraints passed"
+
+
+def validate_symbol_trade_mode_constraints(
+    symbol_info: dict[str, Any],
+    direction: str,
+) -> tuple[bool, str]:
+    require_mt5()
+
+    trade_mode = symbol_info.get("trade_mode")
+    trade_mode_text = symbol_trade_mode_label(trade_mode)
+
+    if trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
+        return False, "Symbol trade mode is DISABLED"
+
+    if trade_mode == mt5.SYMBOL_TRADE_MODE_CLOSEONLY:
+        return False, "Symbol trade mode is CLOSE_ONLY"
+
+    if direction == "BUY" and trade_mode == mt5.SYMBOL_TRADE_MODE_SHORTONLY:
+        return False, "BUY blocked because symbol is SHORT_ONLY"
+
+    if direction == "SELL" and trade_mode == mt5.SYMBOL_TRADE_MODE_LONGONLY:
+        return False, "SELL blocked because symbol is LONG_ONLY"
+
+    return True, f"Symbol trade mode passed: {trade_mode_text}"
+
+
+def validate_symbol_stop_distance_constraints(
+    signal: TradeSignal,
+    symbol_info: dict[str, Any],
+    order_price: float,
+) -> tuple[bool, str]:
+    point = float(symbol_info.get("point", 0.0) or 0.0)
+    stops_level = int(symbol_info.get("trade_stops_level", 0) or 0)
+
+    if point <= 0 or stops_level <= 0:
+        return True, "No broker stop-distance constraint detected"
+
+    min_stop_distance = stops_level * point
+
+    sl_distance = abs(order_price - float(signal.sl_price))
+    tp_distance = abs(float(signal.tp_price) - order_price)
+
+    if sl_distance < min_stop_distance:
+        return False, (
+            f"SL too close to order price: "
+            f"{sl_distance:.5f} < minimum {min_stop_distance:.5f}"
+        )
+
+    if tp_distance < min_stop_distance:
+        return False, (
+            f"TP too close to order price: "
+            f"{tp_distance:.5f} < minimum {min_stop_distance:.5f}"
+        )
+
+    return True, "SL/TP stop-distance constraints passed"
+
+
+def log_symbol_constraints_result(
+    symbol_info: dict[str, Any],
+    passed: bool,
+    reason: str,
+) -> None:
+    if not LOG_MT5_SYMBOL_CONSTRAINTS:
+        return
+
+    trade_mode = symbol_info.get("trade_mode")
+
+    log_event(
+        "HEARTBEAT" if passed else "ORDER_REJECTED",
+        symbol_trade_mode=symbol_trade_mode_label(trade_mode),
+        symbol_volume_min=symbol_info.get("volume_min", ""),
+        symbol_volume_max=symbol_info.get("volume_max", ""),
+        symbol_volume_step=symbol_info.get("volume_step", ""),
+        symbol_point=symbol_info.get("point", ""),
+        symbol_trade_stops_level=symbol_info.get("trade_stops_level", ""),
+        symbol_trade_freeze_level=symbol_info.get("trade_freeze_level", ""),
+        symbol_constraints_pass=passed,
+        symbol_constraints_reason=reason,
+        message=reason,
+    )
+
+
+def validate_mt5_symbol_trade_constraints(
+    signal: TradeSignal,
+    order_price: float,
+) -> tuple[bool, str]:
+    if not ENFORCE_MT5_SYMBOL_TRADE_CONSTRAINTS:
+        return True, "MT5 symbol trade-constraint validation disabled"
+
+    symbol_info = get_symbol_info_dict()
+
+    if symbol_info is None:
+        return False, "Symbol info unavailable"
+
+    checks = [
+        validate_symbol_volume_constraints(symbol_info),
+        validate_symbol_trade_mode_constraints(symbol_info, signal.direction),
+        validate_symbol_stop_distance_constraints(
+            signal=signal,
+            symbol_info=symbol_info,
+            order_price=order_price,
+        ),
+    ]
+
+    for passed, reason in checks:
+        if not passed:
+            log_symbol_constraints_result(
+                symbol_info=symbol_info,
+                passed=False,
+                reason=reason,
+            )
+            return False, reason
+
+    passed_reason = "MT5 symbol trade constraints passed"
+
+    log_symbol_constraints_result(
+        symbol_info=symbol_info,
+        passed=True,
+        reason=passed_reason,
+    )
+
+    return True, passed_reason
+
 def validate_signal_order_inputs(signal: TradeSignal) -> tuple[bool, str]:
     guard_ok, guard_message = order_execution_guard()
 
@@ -5142,6 +5354,31 @@ def place_trade(signal: TradeSignal) -> Any | None:
 
         return None
 
+    symbol_constraints_ok, symbol_constraints_message = validate_mt5_symbol_trade_constraints(
+        signal=signal,
+        order_price=price,
+    )
+
+    if not symbol_constraints_ok:
+        log_event(
+            "ORDER_REJECTED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            entry_price=signal.entry_price,
+            sl_price=signal.sl_price,
+            tp_price=signal.tp_price,
+            runner_target_r=signal.runner_target_r,
+            runner_target_points=signal.runner_target_points,
+            decision="blocked",
+            block_reason=symbol_constraints_message,
+            symbol_constraints_pass=False,
+            symbol_constraints_reason=symbol_constraints_message,
+            message=symbol_constraints_message,
+        )
+
+        return None
+
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": SYMBOL,
@@ -5174,6 +5411,8 @@ def place_trade(signal: TradeSignal) -> Any | None:
         order_execution_armed=ORDER_EXECUTION_ARMED,
         order_execution_confirmation_ok=order_execution_confirmation_ok(),
         order_execution_guard_reason="Order execution guard passed",
+        symbol_constraints_pass=True,
+        symbol_constraints_reason="MT5 symbol trade constraints passed",
         message="Sending MT5 order",
     )
 
@@ -5616,6 +5855,12 @@ def validate_config() -> None:
 
     if ORDER_FILLING_MODE not in {"IOC", "FOK", "RETURN"}:
         raise ValueError("ORDER_FILLING_MODE must be one of: IOC, FOK, RETURN")
+    
+    if ENFORCE_MT5_SYMBOL_TRADE_CONSTRAINTS and not CONNECT_MT5_ON_STARTUP:
+        if EXECUTION_MODE == "place_orders":
+            raise ValueError(
+                "CONNECT_MT5_ON_STARTUP must be True when enforcing MT5 symbol constraints in place_orders mode"
+            )
 
     parse_hhmm_time(MARKET_OPEN_TIME, "MARKET_OPEN_TIME")
     get_timezone(TRADING_TIMEZONE)
@@ -5694,6 +5939,11 @@ def print_startup_config() -> None:
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
+    print(
+        "- Enforce MT5 symbol trade constraints: "
+        f"{ENFORCE_MT5_SYMBOL_TRADE_CONSTRAINTS}"
+    )
+    print(f"- Log MT5 symbol constraints: {LOG_MT5_SYMBOL_CONSTRAINTS}")
     print(f"- Event log path: {EVENT_LOG_PATH}")
     print(f"- Trade state log path: {TRADE_STATE_LOG_PATH}")
     print(f"- Position management enabled: {ENABLE_POSITION_MANAGEMENT}")
