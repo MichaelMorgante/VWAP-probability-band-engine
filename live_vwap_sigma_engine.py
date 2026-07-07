@@ -361,6 +361,22 @@ RUNNER_TRAIL_RULES_R = [
 MAX_DAILY_LOSS_R = -2.0
 MAX_CONSECUTIVE_SL = 2
 
+# ============================================================
+# POSITION MANAGEMENT CONFIG
+# ============================================================
+
+ENABLE_POSITION_MANAGEMENT = False
+# False = do not modify open positions.
+# True  = manage breakeven and runner trailing stops for bot positions.
+
+LOG_POSITION_MANAGEMENT_DECISIONS = True
+
+MIN_SL_UPDATE_DISTANCE_POINTS = 1.0
+# Avoid sending tiny SL updates.
+
+REQUIRE_TRADE_STATE_FOR_POSITION_MANAGEMENT = True
+# True = only manage positions that have a registered/recovered trade state.
+
 
 # ============================================================
 # PROTECTED ADD-ON CONFIG
@@ -633,6 +649,17 @@ LOG_FIELDS = [
     "trade_state_trail_state",
     "trade_state_source",
     "trade_state_open_count",
+    "position_management_enabled",
+    "position_management_action",
+    "position_management_reason",
+    "position_current_price",
+    "position_unrealised_points",
+    "position_unrealised_r",
+    "position_current_sl",
+    "position_new_sl",
+    "position_target_tp",
+    "position_runner_target_price",
+    "position_trail_rule_label",
     "message",
 ]
 
@@ -3330,14 +3357,329 @@ def process_latest_closed_candle(
 # ENGINE LOOP
 # ============================================================
 
-def manage_open_positions_shell() -> None:
-    """
-    Placeholder for future position management.
+# ============================================================
+# POSITION MANAGEMENT
+# ============================================================
 
-    This will later manage breakeven, trailing stops, runner targets,
-    protected add-ons, and safety exits.
-    """
-    return
+def get_position_current_price(position: Any) -> float | None:
+    if mt5 is None:
+        return None
+
+    position_type = getattr(position, "type", None)
+    tick = mt5.symbol_info_tick(SYMBOL)
+
+    if tick is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            position_ticket=getattr(position, "ticket", ""),
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message="No tick available for position management",
+        )
+
+        return None
+
+    if position_type == mt5.POSITION_TYPE_BUY:
+        return float(tick.bid)
+
+    if position_type == mt5.POSITION_TYPE_SELL:
+        return float(tick.ask)
+
+    return None
+
+
+def position_unrealised_points(
+    position: Any,
+    current_price: float,
+) -> float:
+    entry_price = float(getattr(position, "price_open", 0.0) or 0.0)
+    position_type = getattr(position, "type", None)
+
+    if mt5 is not None and position_type == mt5.POSITION_TYPE_BUY:
+        return current_price - entry_price
+
+    if mt5 is not None and position_type == mt5.POSITION_TYPE_SELL:
+        return entry_price - current_price
+
+    return 0.0
+
+
+def position_runner_target_price(state: LiveTradeState) -> float:
+    if state.direction == "BUY":
+        return state.entry_price + state.runner_target_points
+
+    if state.direction == "SELL":
+        return state.entry_price - state.runner_target_points
+
+    return state.tp_price
+
+
+def calculate_candidate_sl_from_trail_rules(
+    position: Any,
+    state: LiveTradeState,
+    unrealised_r: float,
+) -> tuple[float | None, str]:
+    matched_rule = None
+
+    for rule in RUNNER_TRAIL_RULES_R:
+        trigger_r = float(rule["trigger_r"])
+
+        if unrealised_r >= trigger_r:
+            matched_rule = rule
+
+    if matched_rule is None:
+        return None, "No trail rule triggered"
+
+    lock_r = float(matched_rule["lock_r"])
+    label = str(matched_rule.get("label", f"LOCK_{lock_r}R"))
+
+    if state.direction == "BUY":
+        new_sl = state.entry_price + (lock_r * SL_POINTS)
+
+    elif state.direction == "SELL":
+        new_sl = state.entry_price - (lock_r * SL_POINTS)
+
+    else:
+        return None, "Invalid trade-state direction"
+
+    return float(new_sl), label
+
+
+def is_sl_improvement(
+    position: Any,
+    new_sl: float,
+) -> bool:
+    current_sl = float(getattr(position, "sl", 0.0) or 0.0)
+    position_type = getattr(position, "type", None)
+
+    if current_sl == 0.0:
+        return True
+
+    if mt5 is not None and position_type == mt5.POSITION_TYPE_BUY:
+        return new_sl > current_sl + MIN_SL_UPDATE_DISTANCE_POINTS
+
+    if mt5 is not None and position_type == mt5.POSITION_TYPE_SELL:
+        return new_sl < current_sl - MIN_SL_UPDATE_DISTANCE_POINTS
+
+    return False
+
+
+def update_position_sl(
+    position: Any,
+    new_sl: float,
+    reason: str,
+    trail_rule_label: str,
+) -> Any | None:
+    require_mt5()
+
+    position_ticket = getattr(position, "ticket", None)
+    current_tp = float(getattr(position, "tp", 0.0) or 0.0)
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": SYMBOL,
+        "position": position_ticket,
+        "sl": float(new_sl),
+        "tp": current_tp,
+        "magic": MAGIC_NUMBER,
+        "comment": ORDER_COMMENT,
+    }
+
+    log_event(
+        "POSITION_MANAGEMENT",
+        position_ticket=position_ticket,
+        position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+        position_management_action="sl_update_attempt",
+        position_management_reason=reason,
+        position_current_sl=getattr(position, "sl", ""),
+        position_new_sl=new_sl,
+        position_target_tp=current_tp,
+        position_trail_rule_label=trail_rule_label,
+        message=f"Attempting SL update: {reason}",
+    )
+
+    result = mt5.order_send(request)
+
+    if result is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            position_ticket=position_ticket,
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+            position_management_action="sl_update_failed",
+            position_management_reason="order_send returned None",
+            position_new_sl=new_sl,
+            position_trail_rule_label=trail_rule_label,
+            message="SL update failed: order_send returned None",
+        )
+
+        return None
+
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        log_event(
+            "ERROR",
+            position_ticket=position_ticket,
+            retcode=result.retcode,
+            position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+            position_management_action="sl_update_rejected",
+            position_management_reason=str(result),
+            position_new_sl=new_sl,
+            position_trail_rule_label=trail_rule_label,
+            message="SL update rejected by MT5",
+        )
+
+        return None
+
+    log_event(
+        "POSITION_MANAGEMENT",
+        position_ticket=position_ticket,
+        retcode=result.retcode,
+        position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+        position_management_action="sl_updated",
+        position_management_reason=reason,
+        position_current_sl=getattr(position, "sl", ""),
+        position_new_sl=new_sl,
+        position_target_tp=current_tp,
+        position_trail_rule_label=trail_rule_label,
+        message=f"SL updated: {reason}",
+    )
+
+    return result
+
+
+def manage_single_position(position: Any) -> None:
+    state = get_live_trade_state_for_position(position)
+
+    if state is None:
+        state = recover_live_trade_state_from_position(
+            position=position,
+            source="position_management_recovery",
+        )
+
+    if state is None and REQUIRE_TRADE_STATE_FOR_POSITION_MANAGEMENT:
+        log_event(
+            "POSITION_MANAGEMENT",
+            position_ticket=getattr(position, "ticket", ""),
+            position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+            position_management_action="skipped",
+            position_management_reason="No trade state available",
+            message="Position management skipped because no trade state is available",
+        )
+        return
+
+    if state is None:
+        return
+
+    current_price = get_position_current_price(position)
+
+    if current_price is None:
+        return
+
+    unrealised_points = position_unrealised_points(
+        position=position,
+        current_price=current_price,
+    )
+
+    unrealised_r = unrealised_points / float(SL_POINTS)
+
+    candidate_sl, trail_label = calculate_candidate_sl_from_trail_rules(
+        position=position,
+        state=state,
+        unrealised_r=unrealised_r,
+    )
+
+    runner_target_price = position_runner_target_price(state)
+
+    if LOG_POSITION_MANAGEMENT_DECISIONS:
+        log_event(
+            "POSITION_MANAGEMENT",
+            position_ticket=getattr(position, "ticket", ""),
+            setup_family=state.setup_family,
+            direction=state.direction,
+            position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+            position_management_action="checked",
+            position_management_reason=trail_label,
+            position_current_price=current_price,
+            position_unrealised_points=unrealised_points,
+            position_unrealised_r=unrealised_r,
+            position_current_sl=getattr(position, "sl", ""),
+            position_new_sl=candidate_sl if candidate_sl is not None else "",
+            position_target_tp=getattr(position, "tp", ""),
+            position_runner_target_price=runner_target_price,
+            position_trail_rule_label=trail_label,
+            trade_state_ticket=state.ticket,
+            trade_state_setup_family=state.setup_family,
+            trade_state_direction=state.direction,
+            trade_state_trail_state=state.trail_state,
+            message="Position management check completed",
+        )
+
+    if candidate_sl is None:
+        return
+
+    if not is_sl_improvement(position, candidate_sl):
+        return
+
+    result = update_position_sl(
+        position=position,
+        new_sl=candidate_sl,
+        reason=f"Trail rule triggered at {unrealised_r:.2f}R",
+        trail_rule_label=trail_label,
+    )
+
+    if result is None:
+        return
+
+    state.sl_price = float(candidate_sl)
+    state.trail_state = trail_label
+
+    register_live_trade_state(
+        state=state,
+        action="trail_state_updated",
+        source="position_management",
+    )
+
+
+def manage_open_positions() -> None:
+    if not ENABLE_POSITION_MANAGEMENT:
+        log_event(
+            "POSITION_MANAGEMENT",
+            position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+            position_management_action="disabled",
+            message="Position management disabled",
+        )
+        return
+
+    if mt5 is None or not is_mt5_connected():
+        log_event(
+            "POSITION_MANAGEMENT",
+            position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+            position_management_action="skipped",
+            position_management_reason="MT5 unavailable or disconnected",
+            message="Position management skipped because MT5 is unavailable or disconnected",
+        )
+        return
+
+    positions = get_open_bot_positions()
+
+    if not positions:
+        log_event(
+            "POSITION_MANAGEMENT",
+            position_management_enabled=ENABLE_POSITION_MANAGEMENT,
+            position_management_action="no_positions",
+            open_positions_count=0,
+            trade_state_open_count=len(live_trade_states),
+            message="No open bot positions to manage",
+        )
+        return
+
+    for position in positions:
+        manage_single_position(position)
 
 
 def run_single_engine_cycle(bot_start_time: datetime) -> None:
@@ -3355,7 +3697,7 @@ def run_single_engine_cycle(bot_start_time: datetime) -> None:
         )
         return
 
-    manage_open_positions_shell()
+    manage_open_positions()
 
     process_latest_closed_candle(
         candles=candles,
@@ -4545,6 +4887,12 @@ def validate_config() -> None:
     if CANDLE_CONFIRMATION_DELAY_SECONDS < 0:
         raise ValueError("CANDLE_CONFIRMATION_DELAY_SECONDS must be >= 0")
     
+    if MIN_SL_UPDATE_DISTANCE_POINTS < 0:
+        raise ValueError("MIN_SL_UPDATE_DISTANCE_POINTS must be >= 0")
+
+    if REQUIRE_TRADE_STATE_FOR_POSITION_MANAGEMENT and not ENABLE_POSITION_MANAGEMENT:
+        pass
+    
     parse_hhmm_time(NO_NEW_TRADES_AFTER, "NO_NEW_TRADES_AFTER")
     parse_hhmm_time(SESSION_START, "SESSION_START")
     parse_hhmm_time(SESSION_END, "SESSION_END")
@@ -4661,6 +5009,13 @@ def print_startup_config() -> None:
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
     print(f"- Event log path: {EVENT_LOG_PATH}")
     print(f"- Trade state log path: {TRADE_STATE_LOG_PATH}")
+    print(f"- Position management enabled: {ENABLE_POSITION_MANAGEMENT}")
+    print(f"- Log position management decisions: {LOG_POSITION_MANAGEMENT_DECISIONS}")
+    print(f"- Minimum SL update distance points: {MIN_SL_UPDATE_DISTANCE_POINTS}")
+    print(
+        "- Require trade state for position management: "
+        f"{REQUIRE_TRADE_STATE_FOR_POSITION_MANAGEMENT}"
+    )
     print(f"- Run live loop on startup: {RUN_LIVE_LOOP_ON_STARTUP}")
     print(f"- Poll seconds: {POLL_SECONDS}")
     print(f"- Candle confirmation delay seconds: {CANDLE_CONFIRMATION_DELAY_SECONDS}")
