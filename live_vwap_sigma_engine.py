@@ -701,6 +701,9 @@ LOG_FIELDS = [
     "state_recovery_open_position_count",
     "state_recovery_stale_count",
     "state_recovery_error",
+    "daily_risk_action",
+    "daily_risk_date",
+    "previous_daily_risk_date",
     "message",
 ]
 
@@ -782,6 +785,7 @@ daily_realised_r = 0.0
 consecutive_sl_count = 0
 daily_lockout_active = False
 max_consecutive_sl_lockout_active = False
+current_daily_risk_date: str | None = None
 
 live_trade_states: dict[int, LiveTradeState] = {}
 
@@ -3730,6 +3734,7 @@ def run_single_engine_cycle(bot_start_time: datetime) -> None:
 
     loop_iteration += 1
 
+    ensure_daily_risk_state_current()
     reconcile_closed_trade_outcomes()
 
     candles = fetch_recent_candles()
@@ -4531,6 +4536,78 @@ def reconcile_closed_trade_outcomes(
         max_daily_loss_r=MAX_DAILY_LOSS_R,
         max_consecutive_sl=MAX_CONSECUTIVE_SL,
         message=f"Closed trade reconciliation checked {len(bot_close_deals)} bot close deals",
+    )
+
+# ============================================================
+# DAILY RISK RESET
+# ============================================================
+
+def get_daily_risk_date(now: datetime | None = None) -> str:
+    now_dt = get_trading_now(now)
+    return now_dt.date().isoformat()
+
+
+def reset_daily_risk_state(
+    new_daily_risk_date: str,
+    previous_daily_risk_date: str | None,
+) -> None:
+    global daily_realised_r
+    global consecutive_sl_count
+    global daily_lockout_active
+    global max_consecutive_sl_lockout_active
+    global processed_closed_deal_tickets
+
+    daily_realised_r = 0.0
+    consecutive_sl_count = 0
+    daily_lockout_active = False
+    max_consecutive_sl_lockout_active = False
+    processed_closed_deal_tickets.clear()
+
+    log_event(
+        "DAILY_RISK_RESET",
+        daily_risk_action="reset",
+        daily_risk_date=new_daily_risk_date,
+        previous_daily_risk_date=previous_daily_risk_date or "",
+        daily_realised_r=daily_realised_r,
+        consecutive_sl_count=consecutive_sl_count,
+        max_daily_loss_r=MAX_DAILY_LOSS_R,
+        max_consecutive_sl=MAX_CONSECUTIVE_SL,
+        processed_closed_deal_count=len(processed_closed_deal_tickets),
+        message=f"Daily risk state reset for {new_daily_risk_date}",
+    )
+
+
+def ensure_daily_risk_state_current(now: datetime | None = None) -> None:
+    global current_daily_risk_date
+
+    new_daily_risk_date = get_daily_risk_date(now)
+
+    if current_daily_risk_date is None:
+        current_daily_risk_date = new_daily_risk_date
+
+        log_event(
+            "DAILY_RISK_RESET",
+            daily_risk_action="initialised",
+            daily_risk_date=current_daily_risk_date,
+            daily_realised_r=daily_realised_r,
+            consecutive_sl_count=consecutive_sl_count,
+            max_daily_loss_r=MAX_DAILY_LOSS_R,
+            max_consecutive_sl=MAX_CONSECUTIVE_SL,
+            processed_closed_deal_count=len(processed_closed_deal_tickets),
+            message=f"Daily risk date initialised: {current_daily_risk_date}",
+        )
+
+        return
+
+    if new_daily_risk_date == current_daily_risk_date:
+        return
+
+    previous_daily_risk_date = current_daily_risk_date
+    current_daily_risk_date = new_daily_risk_date
+
+    reset_daily_risk_state(
+        new_daily_risk_date=new_daily_risk_date,
+        previous_daily_risk_date=previous_daily_risk_date,
     )
 
 # ============================================================
@@ -5646,6 +5723,8 @@ def print_startup_config() -> None:
 def main() -> None:
     validate_config()
     bot_start_time = get_bot_start_time()
+
+    ensure_daily_risk_state_current(bot_start_time)
 
     print_startup_config()
 
