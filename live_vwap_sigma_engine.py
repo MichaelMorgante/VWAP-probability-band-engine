@@ -65,6 +65,15 @@ ALLOW_LIVE_TRADING = False
 # False should prevent accidental live-account trading if account type can be detected.
 # Demo trading will be allowed once MT5 account checks are added.
 
+ORDER_EXECUTION_ARMED = False
+ORDER_EXECUTION_CONFIRMATION_TEXT = ""
+REQUIRED_ORDER_EXECUTION_CONFIRMATION_TEXT = "I_ACCEPT_MT5_AUTO_EXECUTION_RISK"
+# To allow place_orders mode, all must be true:
+# - EXECUTION_MODE = "place_orders"
+# - CONNECT_MT5_ON_STARTUP = True
+# - ORDER_EXECUTION_ARMED = True
+# - ORDER_EXECUTION_CONFIRMATION_TEXT must exactly match the required text above
+
 # ============================================================
 # MT5 CONNECTION CONFIG
 # ============================================================
@@ -704,6 +713,9 @@ LOG_FIELDS = [
     "daily_risk_action",
     "daily_risk_date",
     "previous_daily_risk_date",
+    "order_execution_armed",
+    "order_execution_confirmation_ok",
+    "order_execution_guard_reason",
     "message",
 ]
 
@@ -4870,8 +4882,37 @@ def get_order_price(direction: str) -> float | None:
 
     raise ValueError(f"Invalid direction: {direction}")
 
+def order_execution_confirmation_ok() -> bool:
+    return (
+        ORDER_EXECUTION_CONFIRMATION_TEXT
+        == REQUIRED_ORDER_EXECUTION_CONFIRMATION_TEXT
+    )
+
+
+def order_execution_guard() -> tuple[bool, str]:
+    if EXECUTION_MODE != "place_orders":
+        return True, "Execution mode is signal_only"
+
+    if not CONNECT_MT5_ON_STARTUP:
+        return False, "CONNECT_MT5_ON_STARTUP must be True for place_orders"
+
+    if not ORDER_EXECUTION_ARMED:
+        return False, "ORDER_EXECUTION_ARMED must be True for place_orders"
+
+    if not order_execution_confirmation_ok():
+        return False, (
+            "ORDER_EXECUTION_CONFIRMATION_TEXT does not match "
+            "REQUIRED_ORDER_EXECUTION_CONFIRMATION_TEXT"
+        )
+
+    return True, "Order execution guard passed"
 
 def validate_signal_order_inputs(signal: TradeSignal) -> tuple[bool, str]:
+    guard_ok, guard_message = order_execution_guard()
+
+    if not guard_ok:
+        return False, guard_message
+
     if not mt5_available():
         return False, "MetaTrader5 package is not installed"
 
@@ -5077,6 +5118,9 @@ def place_trade(signal: TradeSignal) -> Any | None:
             runner_target_points=signal.runner_target_points,
             decision="blocked",
             block_reason=order_inputs_message,
+            order_execution_armed=ORDER_EXECUTION_ARMED,
+            order_execution_confirmation_ok=order_execution_confirmation_ok(),
+            order_execution_guard_reason=order_inputs_message,
             message=order_inputs_message,
         )
 
@@ -5127,6 +5171,9 @@ def place_trade(signal: TradeSignal) -> Any | None:
         order_price=price,
         order_volume=LOT_SIZE,
         order_comment=ORDER_COMMENT,
+        order_execution_armed=ORDER_EXECUTION_ARMED,
+        order_execution_confirmation_ok=order_execution_confirmation_ok(),
+        order_execution_guard_reason="Order execution guard passed",
         message="Sending MT5 order",
     )
 
@@ -5482,6 +5529,12 @@ def validate_config() -> None:
 
     if EXECUTION_MODE not in valid_execution_modes:
         raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
+    
+    if EXECUTION_MODE == "place_orders":
+        guard_ok, guard_message = order_execution_guard()
+
+        if not guard_ok:
+            raise ValueError(guard_message)
 
     if ENGINE_MODE not in valid_engine_modes:
         raise ValueError(f"Invalid ENGINE_MODE: {ENGINE_MODE}")
@@ -5609,7 +5662,7 @@ def validate_config() -> None:
     if EXECUTION_MODE == "place_orders":
         print("")
         print("WARNING: EXECUTION_MODE is set to place_orders.")
-        print("This mode will send orders once MT5 execution is implemented.")
+        print("Order execution arming has passed. This script can send MT5 orders.")
         print("Check SYMBOL, LOT_SIZE, account type, SL/TP, and risk lockouts first.")
         print("")
 
@@ -5663,6 +5716,8 @@ def print_startup_config() -> None:
     print(f"- Poll seconds: {POLL_SECONDS}")
     print(f"- Candle confirmation delay seconds: {CANDLE_CONFIRMATION_DELAY_SECONDS}")
     print(f"- Execution mode: {EXECUTION_MODE}")
+    print(f"- Order execution armed: {ORDER_EXECUTION_ARMED}")
+    print(f"- Order execution confirmation OK: {order_execution_confirmation_ok()}")
     print(f"- Engine mode: {ENGINE_MODE}")
     print(f"- Strategy filter: {USE_STRATEGY_FILTER}")
     print(f"- Strategy filter mode: {STRATEGY_FILTER_MODE}")
