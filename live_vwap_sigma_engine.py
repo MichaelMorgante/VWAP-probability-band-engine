@@ -398,6 +398,17 @@ LOG_FIELDS = [
     "last_processed_signal_time",
     "last_ordered_signal_time",
     "loop_iteration",
+    "session_filter_enabled",
+    "session_start",
+    "session_end",
+    "no_new_trades_after",
+    "daily_realised_r",
+    "max_daily_loss_r",
+    "consecutive_sl_count",
+    "max_consecutive_sl",
+    "open_positions_count",
+    "protected_addons_enabled",
+    "max_open_continuation_trades",
     "message",
 ]
 
@@ -440,6 +451,11 @@ class LiveTradeState:
 last_processed_signal_time: str | None = None
 last_ordered_signal_time: str | None = None
 loop_iteration = 0
+
+daily_realised_r = 0.0
+consecutive_sl_count = 0
+daily_lockout_active = False
+max_consecutive_sl_lockout_active = False
 
 
 # ============================================================
@@ -857,6 +873,14 @@ def handle_signal(
     if not allow_entry:
         return
 
+    safety_ok, safety_message = should_allow_new_entry_after_safety_gates(
+        signal=signal,
+        now=now,
+    )
+
+    if not safety_ok:
+        return
+
     if EXECUTION_MODE == "signal_only":
         log_signal_only(signal)
         return
@@ -1169,6 +1193,188 @@ def is_in_market_open_blackout(now: datetime | None = None) -> bool:
 
     return open_dt <= now_dt < close_dt
 
+def get_trading_now(now: datetime | None = None) -> datetime:
+    timezone_obj = get_timezone(TRADING_TIMEZONE)
+
+    if now is None:
+        return datetime.now(timezone_obj)
+
+    return to_timezone_aware_datetime(now, TRADING_TIMEZONE)
+
+
+def is_after_no_new_trades_time(now: datetime | None = None) -> bool:
+    now_dt = get_trading_now(now)
+    cutoff_time = parse_hhmm_time(NO_NEW_TRADES_AFTER, "NO_NEW_TRADES_AFTER")
+
+    cutoff_dt = datetime.combine(
+        now_dt.date(),
+        cutoff_time,
+        tzinfo=get_timezone(TRADING_TIMEZONE),
+    )
+
+    return now_dt >= cutoff_dt
+
+
+def is_inside_session_window(now: datetime | None = None) -> bool:
+    if not USE_SESSION_FILTER:
+        return True
+
+    now_dt = get_trading_now(now)
+
+    session_start_time = parse_hhmm_time(SESSION_START, "SESSION_START")
+    session_end_time = parse_hhmm_time(SESSION_END, "SESSION_END")
+
+    session_start_dt = datetime.combine(
+        now_dt.date(),
+        session_start_time,
+        tzinfo=get_timezone(TRADING_TIMEZONE),
+    )
+
+    session_end_dt = datetime.combine(
+        now_dt.date(),
+        session_end_time,
+        tzinfo=get_timezone(TRADING_TIMEZONE),
+    )
+
+    return session_start_dt <= now_dt < session_end_dt
+
+def get_open_bot_positions_shell() -> list[Any]:
+    """
+    Placeholder for MT5 open-position lookup.
+
+    Future order/position-management commits will replace this with live MT5
+    position filtering by SYMBOL and MAGIC_NUMBER.
+    """
+    return []
+
+
+def can_open_new_continuation_trade(open_positions: list[Any]) -> tuple[bool, str]:
+    open_positions_count = len(open_positions)
+
+    if not ENABLE_PROTECTED_ADDONS:
+        if open_positions_count > 0:
+            return False, "Open continuation position already exists and add-ons are disabled"
+
+        return True, "No open bot positions"
+
+    if open_positions_count >= MAX_OPEN_CONTINUATION_TRADES:
+        return False, "Max open continuation trades reached"
+
+    if REQUIRE_PRIMARY_PROTECTED_BEFORE_ADDON and open_positions_count > 0:
+        return False, "Protected add-on check is not implemented yet"
+
+    return True, "Open-position rules passed"
+
+
+def is_daily_loss_lockout_active() -> bool:
+    if daily_lockout_active:
+        return True
+
+    return daily_realised_r <= MAX_DAILY_LOSS_R
+
+
+def is_max_consecutive_sl_lockout_active() -> bool:
+    if max_consecutive_sl_lockout_active:
+        return True
+
+    return consecutive_sl_count >= MAX_CONSECUTIVE_SL
+
+
+def should_allow_new_entry_after_safety_gates(
+    signal: TradeSignal,
+    now: datetime | None = None,
+) -> tuple[bool, str]:
+    open_positions = get_open_bot_positions_shell()
+    open_positions_count = len(open_positions)
+
+    if not is_inside_session_window(now):
+        block_reason = "Outside configured trading session"
+
+        log_event(
+            "SIGNAL_BLOCKED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            decision="blocked",
+            block_reason=block_reason,
+            session_filter_enabled=USE_SESSION_FILTER,
+            session_start=SESSION_START,
+            session_end=SESSION_END,
+            message=block_reason,
+        )
+
+        return False, block_reason
+
+    if is_after_no_new_trades_time(now):
+        block_reason = "No-new-trades-after cutoff reached"
+
+        log_event(
+            "SIGNAL_BLOCKED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            decision="blocked",
+            block_reason=block_reason,
+            no_new_trades_after=NO_NEW_TRADES_AFTER,
+            message=block_reason,
+        )
+
+        return False, block_reason
+
+    if is_daily_loss_lockout_active():
+        block_reason = "Daily loss lockout active"
+
+        log_event(
+            "DAILY_LOCKOUT",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            decision="blocked",
+            block_reason=block_reason,
+            daily_realised_r=daily_realised_r,
+            max_daily_loss_r=MAX_DAILY_LOSS_R,
+            message=block_reason,
+        )
+
+        return False, block_reason
+
+    if is_max_consecutive_sl_lockout_active():
+        block_reason = "Max consecutive SL lockout active"
+
+        log_event(
+            "SIGNAL_BLOCKED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            decision="blocked",
+            block_reason=block_reason,
+            consecutive_sl_count=consecutive_sl_count,
+            max_consecutive_sl=MAX_CONSECUTIVE_SL,
+            message=block_reason,
+        )
+
+        return False, block_reason
+
+    can_open, open_position_reason = can_open_new_continuation_trade(open_positions)
+
+    if not can_open:
+        log_event(
+            "SIGNAL_BLOCKED",
+            signal_time=signal.signal_time,
+            direction=signal.direction,
+            setup_family=signal.setup_family,
+            decision="blocked",
+            block_reason=open_position_reason,
+            open_positions_count=open_positions_count,
+            protected_addons_enabled=ENABLE_PROTECTED_ADDONS,
+            max_open_continuation_trades=MAX_OPEN_CONTINUATION_TRADES,
+            message=open_position_reason,
+        )
+
+        return False, open_position_reason
+
+    return True, "New-entry safety gates passed"
+
 
 def should_allow_new_entry_after_startup_checks(
     signal_time: Any,
@@ -1260,6 +1466,13 @@ def validate_config() -> None:
 
     if CANDLE_CONFIRMATION_DELAY_SECONDS < 0:
         raise ValueError("CANDLE_CONFIRMATION_DELAY_SECONDS must be >= 0")
+    
+    parse_hhmm_time(NO_NEW_TRADES_AFTER, "NO_NEW_TRADES_AFTER")
+    parse_hhmm_time(SESSION_START, "SESSION_START")
+    parse_hhmm_time(SESSION_END, "SESSION_END")
+
+    if MAX_CONSECUTIVE_SL <= 0:
+        raise ValueError("MAX_CONSECUTIVE_SL must be > 0")
 
     if RUNNER_TARGET_R <= 0:
         raise ValueError("RUNNER_TARGET_R must be > 0")
@@ -1346,6 +1559,9 @@ def print_startup_config() -> None:
     print(f"- Max daily loss R: {MAX_DAILY_LOSS_R}")
     print(f"- Max consecutive SL: {MAX_CONSECUTIVE_SL}")
     print(f"- No new trades after: {NO_NEW_TRADES_AFTER} {TRADING_TIMEZONE}")
+    print(f"- Session filter enabled: {USE_SESSION_FILTER}")
+    print(f"- Session start: {SESSION_START}")
+    print(f"- Session end: {SESSION_END}")
     print(f"- History lookback minutes: {HISTORY_LOOKBACK_MINUTES}")
     print(f"- Minimum warmup candles: {MIN_WARMUP_CANDLES}")
     print(
