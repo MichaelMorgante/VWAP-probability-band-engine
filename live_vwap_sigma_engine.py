@@ -232,6 +232,15 @@ AUTOMATION_FEATURE_CONFIG = {
 }
 
 # ============================================================
+# RAW CONTINUATION CANDIDATE CONFIG
+# ============================================================
+
+ENABLE_RAW_CONTINUATION_CANDIDATES = True
+LOG_RAW_CONTINUATION_CANDIDATES = True
+# Raw candidates are detected and logged only.
+# They are not promoted to executable TradeSignal objects in this commit.
+
+# ============================================================
 # CORE STRATEGY CONFIG
 # ============================================================
 
@@ -537,6 +546,17 @@ LOG_FIELDS = [
     "latest_regime_label",
     "latest_long_trend_health",
     "latest_short_trend_health",
+    "raw_candidate_count",
+    "raw_candidate_direction",
+    "raw_candidate_pass",
+    "raw_candidate_reason",
+    "raw_candidate_regime",
+    "raw_candidate_red_shift_points",
+    "raw_candidate_red_shift_label",
+    "raw_candidate_trend_health_pass",
+    "raw_candidate_extension_points",
+    "raw_candidate_close_through_green_points",
+    "raw_candidate_body_ratio",
     "message",
 ]
 
@@ -571,6 +591,20 @@ class LiveTradeState:
     runner_target_points: float
     signal_time: Any
     trail_state: str = "OPEN"
+
+@dataclass
+class RawContinuationCandidate:
+    candidate_time: Any
+    direction: str
+    entry_price: float
+    reason: str
+    regime_label: str
+    red_shift_points: float
+    red_shift_label: str
+    trend_health_pass: bool
+    extension_from_green_points: float
+    close_through_green_points: float
+    body_ratio: float
 
 # ============================================================
 # RUNTIME STATE
@@ -2142,6 +2176,179 @@ def compute_live_feature_context(candles: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ============================================================
+# RAW CONTINUATION CANDIDATE DETECTION
+# ============================================================
+
+def safe_bool(value: Any) -> bool:
+    if value is None:
+        return False
+
+    try:
+        if pd.isna(value):
+            return False
+    except TypeError:
+        pass
+
+    return bool(value)
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+
+    try:
+        if pd.isna(value):
+            return default
+    except TypeError:
+        pass
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def latest_feature_row(features_df: pd.DataFrame) -> pd.Series | None:
+    if features_df is None or features_df.empty:
+        return None
+
+    return features_df.iloc[-1]
+
+
+def raw_long_continuation_pass(row: pd.Series) -> bool:
+    return all(
+        [
+            safe_bool(row.get("long_touched_upper_green")),
+            safe_bool(row.get("long_closed_above_upper_green")),
+            safe_bool(row.get("v3_long_vwap_acceptance_pass")),
+            safe_bool(row.get("v3_long_directional_red_shift_pass")),
+            safe_bool(row.get("v3_long_v1_execution_quality_pass")),
+        ]
+    )
+
+
+def raw_short_continuation_pass(row: pd.Series) -> bool:
+    return all(
+        [
+            safe_bool(row.get("short_touched_lower_green")),
+            safe_bool(row.get("short_closed_below_lower_green")),
+            safe_bool(row.get("v3_short_vwap_acceptance_pass")),
+            safe_bool(row.get("v3_short_directional_red_shift_pass")),
+            safe_bool(row.get("v3_short_v1_execution_quality_pass")),
+        ]
+    )
+
+
+def build_raw_candidate_reason(direction: str, row: pd.Series) -> str:
+    regime_label = row.get("v5_regime_20m", "")
+    red_shift_label = (
+        row.get("v3_long_red_shift_bucket", "")
+        if direction == "BUY"
+        else row.get("v3_short_red_shift_bucket", "")
+    )
+
+    return (
+        f"Raw {direction} continuation candidate: "
+        f"green touch/reclaim, VWAP acceptance, red-shift pass, "
+        f"execution quality pass; regime={regime_label}, red_shift={red_shift_label}"
+    )
+
+
+def build_raw_continuation_candidate(
+    row: pd.Series,
+    direction: str,
+) -> RawContinuationCandidate:
+    if direction == "BUY":
+        red_shift_points = safe_float(row.get("v3_long_directional_red_shift"))
+        red_shift_label = str(row.get("v3_long_red_shift_bucket", ""))
+        trend_health_pass = safe_bool(row.get("v2_long_trend_health_pass"))
+        extension_points = safe_float(row.get("long_extension_from_green_points"))
+        close_through_points = safe_float(row.get("long_close_through_green_points"))
+
+    elif direction == "SELL":
+        red_shift_points = safe_float(row.get("v3_short_directional_red_shift"))
+        red_shift_label = str(row.get("v3_short_red_shift_bucket", ""))
+        trend_health_pass = safe_bool(row.get("v2_short_trend_health_pass"))
+        extension_points = safe_float(row.get("short_extension_from_green_points"))
+        close_through_points = safe_float(row.get("short_close_through_green_points"))
+
+    else:
+        raise ValueError(f"Invalid raw candidate direction: {direction}")
+
+    return RawContinuationCandidate(
+        candidate_time=row.get("datetime"),
+        direction=direction,
+        entry_price=safe_float(row.get("close")),
+        reason=build_raw_candidate_reason(direction, row),
+        regime_label=str(row.get("v5_regime_20m", "")),
+        red_shift_points=red_shift_points,
+        red_shift_label=red_shift_label,
+        trend_health_pass=trend_health_pass,
+        extension_from_green_points=extension_points,
+        close_through_green_points=close_through_points,
+        body_ratio=safe_float(row.get("body_ratio")),
+    )
+
+
+def detect_raw_continuation_candidates(
+    features_df: pd.DataFrame,
+) -> list[RawContinuationCandidate]:
+    if not ENABLE_CONTINUATION:
+        return []
+
+    if not ENABLE_RAW_CONTINUATION_CANDIDATES:
+        return []
+
+    row = latest_feature_row(features_df)
+
+    if row is None:
+        return []
+
+    candidates: list[RawContinuationCandidate] = []
+
+    if raw_long_continuation_pass(row):
+        candidates.append(
+            build_raw_continuation_candidate(
+                row=row,
+                direction="BUY",
+            )
+        )
+
+    if raw_short_continuation_pass(row):
+        candidates.append(
+            build_raw_continuation_candidate(
+                row=row,
+                direction="SELL",
+            )
+        )
+
+    return candidates
+
+
+def log_raw_continuation_candidate(candidate: RawContinuationCandidate) -> None:
+    if not LOG_RAW_CONTINUATION_CANDIDATES:
+        return
+
+    log_event(
+        "RAW_CONTINUATION_CANDIDATE",
+        signal_time=candidate.candidate_time,
+        direction=candidate.direction,
+        entry_price=candidate.entry_price,
+        decision="candidate_only",
+        raw_candidate_direction=candidate.direction,
+        raw_candidate_pass=True,
+        raw_candidate_reason=candidate.reason,
+        raw_candidate_regime=candidate.regime_label,
+        raw_candidate_red_shift_points=candidate.red_shift_points,
+        raw_candidate_red_shift_label=candidate.red_shift_label,
+        raw_candidate_trend_health_pass=candidate.trend_health_pass,
+        raw_candidate_extension_points=candidate.extension_from_green_points,
+        raw_candidate_close_through_green_points=candidate.close_through_green_points,
+        raw_candidate_body_ratio=candidate.body_ratio,
+        message="Raw continuation candidate detected; not promoted to executable signal yet",
+    )
+
+# ============================================================
 # SIGNAL PROCESSING SHELL
 # ============================================================
 
@@ -2172,6 +2379,10 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
         return None
 
     latest_feature_row = features_df.iloc[-1]
+    raw_candidates = detect_raw_continuation_candidates(features_df)
+
+    for candidate in raw_candidates:
+        log_raw_continuation_candidate(candidate)
 
     log_event(
         "HEARTBEAT",
@@ -2183,8 +2394,9 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
         latest_regime_label=latest_feature_row.get("v5_regime_20m", ""),
         latest_long_trend_health=latest_feature_row.get("v2_long_trend_health_pass", ""),
         latest_short_trend_health=latest_feature_row.get("v2_short_trend_health_pass", ""),
-        decision="features_only",
-        message="Live automation feature context built; no entry selection applied yet",
+        raw_candidate_count=len(raw_candidates),
+        decision="candidates_only",
+        message="Raw continuation candidates checked; no executable signal selection applied yet",
     )
 
     return None
@@ -3277,6 +3489,11 @@ def validate_config() -> None:
             "Missing automation feature config keys: "
             + ", ".join(missing_automation_keys)
         )
+    
+    if LOG_RAW_CONTINUATION_CANDIDATES and not ENABLE_RAW_CONTINUATION_CANDIDATES:
+        print("")
+        print("WARNING: LOG_RAW_CONTINUATION_CANDIDATES is True but raw candidate detection is disabled.")
+        print("")
 
     if EXECUTION_MODE not in valid_execution_modes:
         raise ValueError(f"Invalid EXECUTION_MODE: {EXECUTION_MODE}")
@@ -3389,6 +3606,8 @@ def print_startup_config() -> None:
     print(f"- Use src feature engine: {USE_SRC_FEATURE_ENGINE}")
     print(f"- Reload src modules on startup: {RELOAD_SRC_MODULES_ON_STARTUP}")
     print(f"- Require src feature engine: {REQUIRE_SRC_FEATURE_ENGINE}")
+    print(f"- Enable raw continuation candidates: {ENABLE_RAW_CONTINUATION_CANDIDATES}")
+    print(f"- Log raw continuation candidates: {LOG_RAW_CONTINUATION_CANDIDATES}")
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
