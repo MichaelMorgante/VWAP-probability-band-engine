@@ -377,6 +377,21 @@ MIN_SL_UPDATE_DISTANCE_POINTS = 1.0
 REQUIRE_TRADE_STATE_FOR_POSITION_MANAGEMENT = True
 # True = only manage positions that have a registered/recovered trade state.
 
+# ============================================================
+# CLOSED TRADE / DAILY RISK RECONCILIATION CONFIG
+# ============================================================
+
+ENABLE_CLOSED_TRADE_RECONCILIATION = True
+# Read-only MT5 history check used to update daily realised R and SL streaks.
+
+CLOSED_TRADE_RECONCILIATION_LOOKBACK_HOURS = 24
+LOSS_R_THRESHOLD_FOR_SL_COUNT = -0.90
+RESET_CONSECUTIVE_SL_AFTER_PROFIT = True
+
+UNKNOWN_LOSS_DEAL_R = -1.0
+UNKNOWN_PROFIT_DEAL_R = 1.0
+# Used only when a closed MT5 deal cannot be matched to a stored trade state.
+
 
 # ============================================================
 # PROTECTED ADD-ON CONFIG
@@ -660,6 +675,16 @@ LOG_FIELDS = [
     "position_target_tp",
     "position_runner_target_price",
     "position_trail_rule_label",
+    "closed_trade_reconciliation_enabled",
+    "closed_trade_action",
+    "closed_trade_deal_ticket",
+    "closed_trade_order_ticket",
+    "closed_trade_position_id",
+    "closed_trade_profit",
+    "closed_trade_price",
+    "closed_trade_realised_r",
+    "closed_trade_source",
+    "processed_closed_deal_count",
     "message",
 ]
 
@@ -743,6 +768,8 @@ daily_lockout_active = False
 max_consecutive_sl_lockout_active = False
 
 live_trade_states: dict[int, LiveTradeState] = {}
+
+processed_closed_deal_tickets: set[int] = set()
 
 
 # ============================================================
@@ -3687,6 +3714,8 @@ def run_single_engine_cycle(bot_start_time: datetime) -> None:
 
     loop_iteration += 1
 
+    reconcile_closed_trade_outcomes()
+
     candles = fetch_recent_candles()
 
     if candles.empty:
@@ -4196,6 +4225,292 @@ def get_live_trade_state_for_position(position: Any) -> LiveTradeState | None:
         return None
 
     return live_trade_states.get(ticket)
+
+# ============================================================
+# CLOSED TRADE / DAILY RISK RECONCILIATION
+# ============================================================
+
+def get_closed_trade_history_window(
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    now_dt = get_trading_now(now)
+
+    trading_day_start = datetime.combine(
+        now_dt.date(),
+        time.min,
+        tzinfo=get_timezone(TRADING_TIMEZONE),
+    )
+
+    lookback_start = now_dt - timedelta(
+        hours=CLOSED_TRADE_RECONCILIATION_LOOKBACK_HOURS
+    )
+
+    history_start = max(trading_day_start, lookback_start)
+
+    return history_start, now_dt
+
+
+def deal_ticket_value(deal: Any) -> int | None:
+    ticket = getattr(deal, "ticket", None)
+
+    if ticket in (None, ""):
+        return None
+
+    try:
+        return int(ticket)
+    except (TypeError, ValueError):
+        return None
+
+
+def deal_position_id_value(deal: Any) -> int | None:
+    position_id = getattr(deal, "position_id", None)
+
+    if position_id in (None, ""):
+        return None
+
+    try:
+        return int(position_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def is_bot_close_deal(deal: Any) -> bool:
+    if mt5 is None:
+        return False
+
+    if getattr(deal, "symbol", "") != SYMBOL:
+        return False
+
+    if getattr(deal, "magic", None) != MAGIC_NUMBER:
+        return False
+
+    close_entries = {
+        mt5.DEAL_ENTRY_OUT,
+        mt5.DEAL_ENTRY_INOUT,
+        mt5.DEAL_ENTRY_OUT_BY,
+    }
+
+    return getattr(deal, "entry", None) in close_entries
+
+
+def get_trade_state_for_close_deal(deal: Any) -> LiveTradeState | None:
+    position_id = deal_position_id_value(deal)
+
+    if position_id is not None and position_id in live_trade_states:
+        return live_trade_states[position_id]
+
+    order_ticket = getattr(deal, "order", None)
+
+    try:
+        order_ticket = int(order_ticket)
+    except (TypeError, ValueError):
+        order_ticket = None
+
+    if order_ticket is not None and order_ticket in live_trade_states:
+        return live_trade_states[order_ticket]
+
+    return None
+
+
+def calculate_closed_deal_realised_r(
+    deal: Any,
+    state: LiveTradeState | None,
+) -> float:
+    deal_profit = safe_float(getattr(deal, "profit", 0.0))
+
+    if state is None:
+        if deal_profit < 0:
+            return float(UNKNOWN_LOSS_DEAL_R)
+
+        if deal_profit > 0:
+            return float(UNKNOWN_PROFIT_DEAL_R)
+
+        return 0.0
+
+    exit_price = safe_float(getattr(deal, "price", 0.0))
+
+    if exit_price <= 0:
+        if deal_profit < 0:
+            return float(UNKNOWN_LOSS_DEAL_R)
+
+        if deal_profit > 0:
+            return float(UNKNOWN_PROFIT_DEAL_R)
+
+        return 0.0
+
+    if state.direction == "BUY":
+        realised_points = exit_price - state.entry_price
+
+    elif state.direction == "SELL":
+        realised_points = state.entry_price - exit_price
+
+    else:
+        if deal_profit < 0:
+            return float(UNKNOWN_LOSS_DEAL_R)
+
+        if deal_profit > 0:
+            return float(UNKNOWN_PROFIT_DEAL_R)
+
+        return 0.0
+
+    return realised_points / float(SL_POINTS)
+
+
+def archive_live_trade_state_after_close(
+    state: LiveTradeState,
+    realised_r: float,
+    source: str,
+) -> None:
+    append_trade_state_record(
+        action="closed",
+        state=state,
+        source=source,
+    )
+
+    live_trade_states.pop(int(state.ticket), None)
+
+    log_event(
+        "TRADE_STATE",
+        signal_time=state.signal_time,
+        direction=state.direction,
+        setup_family=state.setup_family,
+        entry_price=state.entry_price,
+        sl_price=state.sl_price,
+        tp_price=state.tp_price,
+        runner_target_r=state.runner_target_r,
+        runner_target_points=state.runner_target_points,
+        position_ticket=state.ticket,
+        trade_state_action="closed",
+        trade_state_ticket=state.ticket,
+        trade_state_setup_family=state.setup_family,
+        trade_state_direction=state.direction,
+        trade_state_trail_state=state.trail_state,
+        trade_state_source=source,
+        trade_state_open_count=len(live_trade_states),
+        closed_trade_realised_r=realised_r,
+        message=f"Live trade state closed: ticket={state.ticket}",
+    )
+
+
+def update_daily_risk_state_from_closed_trade(
+    realised_r: float,
+) -> None:
+    global daily_realised_r
+    global consecutive_sl_count
+    global daily_lockout_active
+    global max_consecutive_sl_lockout_active
+
+    daily_realised_r += float(realised_r)
+
+    if realised_r <= LOSS_R_THRESHOLD_FOR_SL_COUNT:
+        consecutive_sl_count += 1
+
+    elif realised_r > 0 and RESET_CONSECUTIVE_SL_AFTER_PROFIT:
+        consecutive_sl_count = 0
+
+    if daily_realised_r <= MAX_DAILY_LOSS_R:
+        daily_lockout_active = True
+
+    if consecutive_sl_count >= MAX_CONSECUTIVE_SL:
+        max_consecutive_sl_lockout_active = True
+
+
+def process_closed_trade_deal(deal: Any) -> None:
+    deal_ticket = deal_ticket_value(deal)
+
+    if deal_ticket is None:
+        return
+
+    if deal_ticket in processed_closed_deal_tickets:
+        return
+
+    state = get_trade_state_for_close_deal(deal)
+    realised_r = calculate_closed_deal_realised_r(
+        deal=deal,
+        state=state,
+    )
+
+    update_daily_risk_state_from_closed_trade(realised_r)
+
+    processed_closed_deal_tickets.add(deal_ticket)
+
+    if state is not None:
+        archive_live_trade_state_after_close(
+            state=state,
+            realised_r=realised_r,
+            source="closed_trade_reconciliation",
+        )
+
+    log_event(
+        "CLOSED_TRADE_RECONCILED",
+        setup_family=state.setup_family if state else "UNKNOWN",
+        direction=state.direction if state else "",
+        entry_price=state.entry_price if state else "",
+        closed_trade_reconciliation_enabled=ENABLE_CLOSED_TRADE_RECONCILIATION,
+        closed_trade_action="processed",
+        closed_trade_deal_ticket=deal_ticket,
+        closed_trade_order_ticket=getattr(deal, "order", ""),
+        closed_trade_position_id=getattr(deal, "position_id", ""),
+        closed_trade_profit=getattr(deal, "profit", ""),
+        closed_trade_price=getattr(deal, "price", ""),
+        closed_trade_realised_r=realised_r,
+        closed_trade_source="mt5_history",
+        processed_closed_deal_count=len(processed_closed_deal_tickets),
+        daily_realised_r=daily_realised_r,
+        consecutive_sl_count=consecutive_sl_count,
+        max_daily_loss_r=MAX_DAILY_LOSS_R,
+        max_consecutive_sl=MAX_CONSECUTIVE_SL,
+        message="Closed trade reconciled into daily risk state",
+    )
+
+
+def reconcile_closed_trade_outcomes(
+    now: datetime | None = None,
+) -> None:
+    if not ENABLE_CLOSED_TRADE_RECONCILIATION:
+        return
+
+    if mt5 is None or not is_mt5_connected():
+        return
+
+    history_start, history_end = get_closed_trade_history_window(now)
+
+    deals = mt5.history_deals_get(history_start, history_end)
+
+    if deals is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            closed_trade_reconciliation_enabled=ENABLE_CLOSED_TRADE_RECONCILIATION,
+            closed_trade_action="history_fetch_failed",
+            message="Could not fetch MT5 closed trade history",
+        )
+
+        return
+
+    bot_close_deals = [
+        deal
+        for deal in deals
+        if is_bot_close_deal(deal)
+    ]
+
+    for deal in bot_close_deals:
+        process_closed_trade_deal(deal)
+
+    log_event(
+        "HEARTBEAT",
+        closed_trade_reconciliation_enabled=ENABLE_CLOSED_TRADE_RECONCILIATION,
+        closed_trade_action="history_checked",
+        processed_closed_deal_count=len(processed_closed_deal_tickets),
+        daily_realised_r=daily_realised_r,
+        consecutive_sl_count=consecutive_sl_count,
+        max_daily_loss_r=MAX_DAILY_LOSS_R,
+        max_consecutive_sl=MAX_CONSECUTIVE_SL,
+        message=f"Closed trade reconciliation checked {len(bot_close_deals)} bot close deals",
+    )
 
 # ============================================================
 # ORDER EXECUTION HELPERS
@@ -4890,6 +5205,18 @@ def validate_config() -> None:
     if MIN_SL_UPDATE_DISTANCE_POINTS < 0:
         raise ValueError("MIN_SL_UPDATE_DISTANCE_POINTS must be >= 0")
 
+    if CLOSED_TRADE_RECONCILIATION_LOOKBACK_HOURS <= 0:
+        raise ValueError("CLOSED_TRADE_RECONCILIATION_LOOKBACK_HOURS must be > 0")
+
+    if LOSS_R_THRESHOLD_FOR_SL_COUNT >= 0:
+        raise ValueError("LOSS_R_THRESHOLD_FOR_SL_COUNT must be negative")
+
+    if UNKNOWN_LOSS_DEAL_R >= 0:
+        raise ValueError("UNKNOWN_LOSS_DEAL_R must be negative")
+
+    if UNKNOWN_PROFIT_DEAL_R <= 0:
+        raise ValueError("UNKNOWN_PROFIT_DEAL_R must be positive")
+
     if REQUIRE_TRADE_STATE_FOR_POSITION_MANAGEMENT and not ENABLE_POSITION_MANAGEMENT:
         pass
     
@@ -5010,6 +5337,12 @@ def print_startup_config() -> None:
     print(f"- Event log path: {EVENT_LOG_PATH}")
     print(f"- Trade state log path: {TRADE_STATE_LOG_PATH}")
     print(f"- Position management enabled: {ENABLE_POSITION_MANAGEMENT}")
+    print(f"- Closed trade reconciliation enabled: {ENABLE_CLOSED_TRADE_RECONCILIATION}")
+    print(
+        "- Closed trade reconciliation lookback hours: "
+        f"{CLOSED_TRADE_RECONCILIATION_LOOKBACK_HOURS}"
+    )
+    print(f"- Loss R threshold for SL count: {LOSS_R_THRESHOLD_FOR_SL_COUNT}")
     print(f"- Log position management decisions: {LOG_POSITION_MANAGEMENT_DECISIONS}")
     print(f"- Minimum SL update distance points: {MIN_SL_UPDATE_DISTANCE_POINTS}")
     print(
