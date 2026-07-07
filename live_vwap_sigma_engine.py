@@ -620,6 +620,10 @@ LOG_FIELDS = [
     "router_regime",
     "router_setup_family",
     "router_mode",
+    "router_bypass_pass",
+    "router_bypass_reason",
+    "router_bypass_setup_family",
+    "router_bypass_trend_health_mode",
     "message",
 ]
 
@@ -2870,6 +2874,146 @@ def setup_allowed_in_volatile_trend(candidate: ClassifiedContinuationCandidate) 
     return False, f"Unknown setup family for volatile-trend routing: {setup_family}"
 
 
+def bypass_rule_for_setup(setup_family: str) -> dict[str, Any]:
+    return ROUTER_BYPASS_RULES.get(setup_family, {})
+
+
+def bypass_trend_health_required(
+    candidate: ClassifiedContinuationCandidate,
+    rule: dict[str, Any],
+) -> tuple[bool, str]:
+    trend_health_mode = rule.get("trend_health_mode")
+
+    if trend_health_mode is None:
+        legacy_requires_trend_health = bool(rule.get("requires_trend_health", False))
+
+        if legacy_requires_trend_health:
+            return True, "Legacy bypass trend-health requirement enabled"
+
+        return False, "Bypass trend health not required"
+
+    if trend_health_mode == "off":
+        return False, "Bypass trend-health mode is off"
+
+    if trend_health_mode == "always":
+        return True, "Bypass trend-health mode always requires trend health"
+
+    if trend_health_mode == "follow_v2_activation":
+        return (
+            bool(USE_TREND_HEALTH_FILTER),
+            "Bypass follows global V2 trend-health activation",
+        )
+
+    if trend_health_mode == "after_time":
+        after_time_value = rule.get("trend_health_after_time")
+        after_timezone = rule.get("trend_health_after_timezone", TRADING_TIMEZONE)
+
+        if not after_time_value:
+            return False, "Bypass after_time has no configured time"
+
+        candidate_dt = to_timezone_aware_datetime(
+            candidate.candidate_time,
+            after_timezone,
+        )
+
+        after_time = parse_hhmm_time(
+            after_time_value,
+            "trend_health_after_time",
+        )
+
+        after_dt = datetime.combine(
+            candidate_dt.date(),
+            after_time,
+            tzinfo=get_timezone(after_timezone),
+        )
+
+        if candidate_dt >= after_dt:
+            return True, f"Bypass requires trend health after {after_time_value} {after_timezone}"
+
+        return False, f"Bypass trend health not required before {after_time_value} {after_timezone}"
+
+    return True, f"Unknown bypass trend-health mode treated as required: {trend_health_mode}"
+
+
+def router_bypass_decision(
+    candidate: ClassifiedContinuationCandidate,
+) -> tuple[bool, str]:
+    rule = bypass_rule_for_setup(candidate.setup_family)
+
+    if not rule:
+        return False, f"No bypass rule configured for {candidate.setup_family}"
+
+    if not bool(rule.get("enabled", False)):
+        return False, f"Bypass disabled for {candidate.setup_family}"
+
+    requires_red_shift_floor = bool(rule.get("requires_red_shift_floor", False))
+
+    if requires_red_shift_floor:
+        min_red_shift = float(
+            rule.get(
+                "min_directional_red_shift_points",
+                setup_min_red_shift_points(candidate.setup_family),
+            )
+        )
+
+        if candidate.red_shift_points < min_red_shift:
+            return False, (
+                f"Bypass red-shift floor failed: "
+                f"{candidate.red_shift_points:.2f} < {min_red_shift:.2f}"
+            )
+
+    trend_health_required, trend_health_reason = bypass_trend_health_required(
+        candidate=candidate,
+        rule=rule,
+    )
+
+    if trend_health_required and not candidate.trend_health_pass:
+        return False, f"Bypass trend-health failed: {trend_health_reason}"
+
+    max_extension = rule.get("max_extension_from_green")
+
+    if max_extension is not None:
+        max_extension = float(max_extension)
+
+        if candidate.extension_from_green_points > max_extension:
+            return False, (
+                f"Bypass extension failed: "
+                f"{candidate.extension_from_green_points:.2f} > {max_extension:.2f}"
+            )
+
+    return True, f"Router bypass allowed for {candidate.setup_family}: {trend_health_reason}"
+
+
+def log_router_bypass_decision(
+    candidate: ClassifiedContinuationCandidate,
+    bypass_pass: bool,
+    bypass_reason: str,
+) -> None:
+    if not LOG_REGIME_ROUTER_DECISIONS:
+        return
+
+    rule = bypass_rule_for_setup(candidate.setup_family)
+
+    log_event(
+        "ROUTER_BYPASS_DECISION",
+        signal_time=candidate.candidate_time,
+        direction=candidate.direction,
+        setup_family=candidate.setup_family,
+        entry_price=candidate.entry_price,
+        decision="bypass_pass" if bypass_pass else "bypass_block",
+        router_bypass_pass=bypass_pass,
+        router_bypass_reason=bypass_reason,
+        router_bypass_setup_family=candidate.setup_family,
+        router_bypass_trend_health_mode=rule.get("trend_health_mode", ""),
+        router_regime=candidate_regime_label(candidate),
+        router_mode=STRATEGY_FILTER_MODE,
+        raw_candidate_red_shift_points=candidate.red_shift_points,
+        raw_candidate_red_shift_label=candidate.red_shift_label,
+        raw_candidate_trend_health_pass=candidate.trend_health_pass,
+        raw_candidate_extension_points=candidate.extension_from_green_points,
+        message=bypass_reason,
+    )
+
 def regime_router_decision(
     candidate: ClassifiedContinuationCandidate,
 ) -> tuple[bool, str]:
@@ -2940,6 +3084,18 @@ def apply_regime_router_to_classified_candidates(
 
         if router_pass:
             routed_candidates.append(candidate)
+            continue
+
+        bypass_pass, bypass_reason = router_bypass_decision(candidate)
+
+        log_router_bypass_decision(
+            candidate=candidate,
+            bypass_pass=bypass_pass,
+            bypass_reason=bypass_reason,
+        )
+
+        if bypass_pass:
+            routed_candidates.append(candidate)
 
     return routed_candidates
 
@@ -3008,6 +3164,7 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
         raw_candidate_count=len(raw_candidates),
         classified_candidate_count=len(classified_candidates),
         router_pass=len(routed_candidates) > 0,
+        router_reason="At least one candidate passed router or bypass" if routed_candidates else "No candidate passed router or bypass",
         router_regime=latest_feature_row.get("v5_regime_20m", ""),
         router_mode=STRATEGY_FILTER_MODE,
         selected_signal_setup_family=selected_signal.setup_family if selected_signal else "",
@@ -4239,6 +4396,19 @@ def validate_config() -> None:
             raise ValueError(
                 f"Invalid trend_health_mode for {setup_family}: {trend_health_mode}"
             )
+
+        trend_health_after_time = rule.get("trend_health_after_time")
+
+        if trend_health_after_time is not None:
+            parse_hhmm_time(
+                trend_health_after_time,
+                f"{setup_family}.trend_health_after_time",
+            )
+
+        trend_health_after_timezone = rule.get("trend_health_after_timezone")
+
+        if trend_health_after_timezone is not None:
+            get_timezone(trend_health_after_timezone)
         
     if USE_SRC_FEATURE_ENGINE and CONNECT_MT5_ON_STARTUP:
         import_src_feature_engine()
@@ -4274,6 +4444,7 @@ def print_startup_config() -> None:
     print(f"- Continuation signal selection mode: {CONTINUATION_SIGNAL_SELECTION_MODE}")
     print(f"- Log regime-router decisions: {LOG_REGIME_ROUTER_DECISIONS}")
     print(f"- Continuation blocked regimes: {sorted(CONTINUATION_BLOCKED_REGIMES)}")
+    print(f"- Router bypass rules enabled: {[k for k, v in ROUTER_BYPASS_RULES.items() if v.get('enabled', False)]}")
     print(f"- Order deviation points: {ORDER_DEVIATION_POINTS}")
     print(f"- Order filling mode: {ORDER_FILLING_MODE}")
     print(f"- Close if SL missing after fill: {CLOSE_IF_SL_MISSING_AFTER_FILL}")
