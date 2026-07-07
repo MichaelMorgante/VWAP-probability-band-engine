@@ -16,9 +16,17 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass, asdict
 from datetime import datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from math import ceil
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import pandas as pd
+
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    mt5 = None
 
 
 # ============================================================
@@ -47,6 +55,27 @@ CANDLE_CONFIRMATION_DELAY_SECONDS = 2
 ALLOW_LIVE_TRADING = False
 # False should prevent accidental live-account trading if account type can be detected.
 # Demo trading will be allowed once MT5 account checks are added.
+
+# ============================================================
+# MT5 CONNECTION CONFIG
+# ============================================================
+
+CONNECT_MT5_ON_STARTUP = False
+# False = do not connect when the script starts.
+# True  = test MT5 terminal connection and candle loading at startup.
+
+MT5_TERMINAL_PATH = None
+# Optional path to terminal64.exe.
+# Leave as None to use the default installed/logged-in terminal.
+
+MT5_LOGIN = None
+MT5_PASSWORD = None
+MT5_SERVER = None
+# Optional login details.
+# Prefer leaving these as None and logging in through the MT5 terminal.
+
+MT5_TIMEOUT_MS = 60_000
+MT5_PORTABLE_MODE = False
 
 
 # ============================================================
@@ -79,6 +108,19 @@ MARKET_OPEN_TIME = "14:30"
 MARKET_OPEN_TIMEZONE = "Europe/London"
 MARKET_OPEN_BLOCK_MINUTES = 15
 
+# ============================================================
+# TIMEFRAME HELPERS
+# ============================================================
+
+TIMEFRAME_SECONDS = {
+    "M1": 60,
+    "M5": 5 * 60,
+    "M15": 15 * 60,
+    "M30": 30 * 60,
+    "H1": 60 * 60,
+    "H4": 4 * 60 * 60,
+    "D1": 24 * 60 * 60,
+}
 
 # ============================================================
 # CORE STRATEGY CONFIG
@@ -339,6 +381,14 @@ LOG_FIELDS = [
     "market_open_time",
     "market_open_timezone",
     "market_open_block_minutes",
+    "timeframe",
+    "bars_requested",
+    "mt5_error_code",
+    "mt5_error_message",
+    "account_login",
+    "account_server",
+    "account_trade_mode",
+    "account_company",
     "message",
 ]
 
@@ -403,6 +453,332 @@ def log_event(event_type: str, **kwargs: Any) -> None:
         writer.writerow(row)
 
     print(f"[{row['timestamp']}] {event_type}: {kwargs.get('message', '')}")
+
+# ============================================================
+# MT5 HELPERS
+# ============================================================
+
+def mt5_available() -> bool:
+    return mt5 is not None
+
+
+def require_mt5() -> None:
+    if mt5 is None:
+        raise RuntimeError(
+            "MetaTrader5 package is not installed. "
+            "Install it with: pip install MetaTrader5"
+        )
+
+
+def get_mt5_last_error() -> tuple[Any, Any]:
+    if mt5 is None:
+        return "", ""
+
+    error = mt5.last_error()
+
+    if isinstance(error, tuple) and len(error) >= 2:
+        return error[0], error[1]
+
+    return "", str(error)
+
+
+def get_mt5_timeframe(timeframe: str) -> Any:
+    require_mt5()
+
+    timeframe_map = {
+        "M1": mt5.TIMEFRAME_M1,
+        "M5": mt5.TIMEFRAME_M5,
+        "M15": mt5.TIMEFRAME_M15,
+        "M30": mt5.TIMEFRAME_M30,
+        "H1": mt5.TIMEFRAME_H1,
+        "H4": mt5.TIMEFRAME_H4,
+        "D1": mt5.TIMEFRAME_D1,
+    }
+
+    if timeframe not in timeframe_map:
+        raise ValueError(f"Unsupported TIMEFRAME for MT5: {timeframe}")
+
+    return timeframe_map[timeframe]
+
+
+def account_trade_mode_label(trade_mode: Any) -> str:
+    require_mt5()
+
+    labels = {
+        mt5.ACCOUNT_TRADE_MODE_DEMO: "DEMO",
+        mt5.ACCOUNT_TRADE_MODE_CONTEST: "CONTEST",
+        mt5.ACCOUNT_TRADE_MODE_REAL: "REAL",
+    }
+
+    return labels.get(trade_mode, f"UNKNOWN_{trade_mode}")
+
+
+def initialize_mt5() -> bool:
+    require_mt5()
+
+    initialize_kwargs = {
+        "timeout": MT5_TIMEOUT_MS,
+        "portable": MT5_PORTABLE_MODE,
+    }
+
+    if MT5_TERMINAL_PATH:
+        initialize_kwargs["path"] = MT5_TERMINAL_PATH
+
+    if MT5_LOGIN is not None:
+        initialize_kwargs["login"] = int(MT5_LOGIN)
+
+    if MT5_PASSWORD is not None:
+        initialize_kwargs["password"] = MT5_PASSWORD
+
+    if MT5_SERVER is not None:
+        initialize_kwargs["server"] = MT5_SERVER
+
+    initialized = mt5.initialize(**initialize_kwargs)
+
+    if not initialized:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message="MT5 initialize failed",
+        )
+
+        return False
+
+    log_event(
+        "HEARTBEAT",
+        message="MT5 initialized successfully",
+    )
+
+    return True
+
+
+def shutdown_mt5() -> None:
+    if mt5 is not None:
+        mt5.shutdown()
+
+    log_event(
+        "HEARTBEAT",
+        message="MT5 shutdown completed",
+    )
+
+
+def get_account_info() -> Any:
+    require_mt5()
+
+    account_info = mt5.account_info()
+
+    if account_info is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message="Could not read MT5 account info",
+        )
+
+        return None
+
+    account_data = account_info._asdict()
+    trade_mode = account_trade_mode_label(account_data.get("trade_mode"))
+
+    log_event(
+        "HEARTBEAT",
+        account_login=account_data.get("login"),
+        account_server=account_data.get("server"),
+        account_trade_mode=trade_mode,
+        account_company=account_data.get("company"),
+        message=f"Connected MT5 account detected: {trade_mode}",
+    )
+
+    return account_info
+
+
+def validate_account_safety() -> bool:
+    require_mt5()
+
+    account_info = get_account_info()
+
+    if account_info is None:
+        return False
+
+    account_data = account_info._asdict()
+    trade_mode = account_data.get("trade_mode")
+    trade_mode_label = account_trade_mode_label(trade_mode)
+
+    if trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL and not ALLOW_LIVE_TRADING:
+        log_event(
+            "CRITICAL",
+            account_login=account_data.get("login"),
+            account_server=account_data.get("server"),
+            account_trade_mode=trade_mode_label,
+            account_company=account_data.get("company"),
+            message=(
+                "Real/live MT5 account detected and ALLOW_LIVE_TRADING is False. "
+                "Automated trading is blocked."
+            ),
+        )
+
+        return False
+
+    return True
+
+
+def ensure_symbol_selected() -> bool:
+    require_mt5()
+
+    symbol_info = mt5.symbol_info(SYMBOL)
+
+    if symbol_info is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message=f"Symbol not found in MT5: {SYMBOL}",
+        )
+
+        return False
+
+    if symbol_info.visible:
+        log_event(
+            "HEARTBEAT",
+            message=f"Symbol already visible: {SYMBOL}",
+        )
+
+        return True
+
+    selected = mt5.symbol_select(SYMBOL, True)
+
+    if not selected:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message=f"Could not select symbol: {SYMBOL}",
+        )
+
+        return False
+
+    log_event(
+        "HEARTBEAT",
+        message=f"Symbol selected: {SYMBOL}",
+    )
+
+    return True
+
+
+def calculate_history_bar_count() -> int:
+    if TIMEFRAME not in TIMEFRAME_SECONDS:
+        raise ValueError(f"Unsupported TIMEFRAME: {TIMEFRAME}")
+
+    timeframe_seconds = TIMEFRAME_SECONDS[TIMEFRAME]
+    bars_for_lookback = ceil((HISTORY_LOOKBACK_MINUTES * 60) / timeframe_seconds)
+
+    return max(
+        bars_for_lookback + 5,
+        MIN_WARMUP_CANDLES + 5,
+        10,
+    )
+
+
+def fetch_recent_candles() -> pd.DataFrame:
+    require_mt5()
+
+    timeframe = get_mt5_timeframe(TIMEFRAME)
+    bars_requested = calculate_history_bar_count()
+
+    rates = mt5.copy_rates_from_pos(
+        SYMBOL,
+        timeframe,
+        0,
+        bars_requested,
+    )
+
+    if rates is None:
+        error_code, error_message = get_mt5_last_error()
+
+        log_event(
+            "ERROR",
+            timeframe=TIMEFRAME,
+            bars_requested=bars_requested,
+            mt5_error_code=error_code,
+            mt5_error_message=error_message,
+            message="MT5 candle fetch returned None",
+        )
+
+        return pd.DataFrame()
+
+    candles = pd.DataFrame(rates)
+
+    if candles.empty:
+        log_event(
+            "ERROR",
+            timeframe=TIMEFRAME,
+            bars_requested=bars_requested,
+            message="MT5 candle fetch returned an empty DataFrame",
+        )
+
+        return candles
+
+    candles["time"] = pd.to_datetime(candles["time"], unit="s", utc=True)
+    candles["time"] = candles["time"].dt.tz_convert(TRADING_TIMEZONE)
+
+    candles = candles.set_index("time").sort_index()
+
+    if "tick_volume" in candles.columns and "volume" not in candles.columns:
+        candles["volume"] = candles["tick_volume"]
+
+    numeric_columns = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "tick_volume",
+        "spread",
+        "real_volume",
+        "volume",
+    ]
+
+    for column in numeric_columns:
+        if column in candles.columns:
+            candles[column] = pd.to_numeric(candles[column], errors="coerce")
+
+    log_event(
+        "HEARTBEAT",
+        timeframe=TIMEFRAME,
+        bars_requested=bars_requested,
+        candles_loaded=len(candles),
+        history_lookback_minutes=HISTORY_LOOKBACK_MINUTES,
+        message=f"Fetched {len(candles)} candles from MT5",
+    )
+
+    return candles
+
+
+def get_closed_candles(candles: pd.DataFrame) -> pd.DataFrame:
+    if candles is None or candles.empty:
+        return pd.DataFrame()
+
+    if len(candles) < 2:
+        return candles.iloc[0:0].copy()
+
+    return candles.iloc[:-1].copy()
+
+
+def get_latest_closed_candle(candles: pd.DataFrame) -> pd.Series | None:
+    closed_candles = get_closed_candles(candles)
+
+    if closed_candles.empty:
+        return None
+
+    return closed_candles.iloc[-1]
 
 
 # ============================================================
@@ -642,6 +1018,15 @@ def validate_config() -> None:
 
     if MARKET_OPEN_BLOCK_MINUTES < 0:
         raise ValueError("MARKET_OPEN_BLOCK_MINUTES must be >= 0")
+    
+    if TIMEFRAME not in TIMEFRAME_SECONDS:
+        raise ValueError(
+            f"Unsupported TIMEFRAME: {TIMEFRAME}. "
+            f"Supported values: {sorted(TIMEFRAME_SECONDS)}"
+        )
+
+    if MT5_TIMEOUT_MS <= 0:
+        raise ValueError("MT5_TIMEOUT_MS must be > 0")
 
     parse_hhmm_time(MARKET_OPEN_TIME, "MARKET_OPEN_TIME")
     get_timezone(TRADING_TIMEZONE)
@@ -683,6 +1068,10 @@ def print_startup_config() -> None:
     print("")
     print(f"- Symbol: {SYMBOL}")
     print(f"- Timeframe: {TIMEFRAME}")
+    print(f"- Connect MT5 on startup: {CONNECT_MT5_ON_STARTUP}")
+    print(f"- MT5 terminal path: {MT5_TERMINAL_PATH}")
+    print(f"- MT5 login configured: {MT5_LOGIN is not None}")
+    print(f"- MT5 server configured: {MT5_SERVER is not None}")
     print(f"- Execution mode: {EXECUTION_MODE}")
     print(f"- Engine mode: {ENGINE_MODE}")
     print(f"- Strategy filter: {USE_STRATEGY_FILTER}")
@@ -754,8 +1143,62 @@ def main() -> None:
         market_open_time=MARKET_OPEN_TIME,
         market_open_timezone=MARKET_OPEN_TIMEZONE,
         market_open_block_minutes=MARKET_OPEN_BLOCK_MINUTES,
-        message="Live continuation engine skeleton started. Startup/lookback controls loaded. MT5 connection not implemented yet.",
+        timeframe=TIMEFRAME,
+        message="VWAP Sigma live execution engine started",
     )
+
+    if not CONNECT_MT5_ON_STARTUP:
+        print("MT5 startup connection is disabled.")
+        print("Set CONNECT_MT5_ON_STARTUP = True to test MT5 connection and candle loading.")
+        print("Engine startup checks completed.")
+        return
+
+    mt5_started = initialize_mt5()
+
+    if not mt5_started:
+        print("MT5 startup connection failed. Check logs for details.")
+        return
+
+    try:
+        if not validate_account_safety():
+            print("MT5 account safety check failed. Check logs for details.")
+            return
+
+        if not ensure_symbol_selected():
+            print("MT5 symbol selection failed. Check logs for details.")
+            return
+
+        candles = fetch_recent_candles()
+        closed_candles = get_closed_candles(candles)
+
+        warmup_ok, warmup_message = has_enough_warmup(closed_candles)
+
+        log_event(
+            "HEARTBEAT" if warmup_ok else "WARMUP_WAIT",
+            candles_loaded=len(closed_candles),
+            min_warmup_candles=MIN_WARMUP_CANDLES,
+            history_lookback_minutes=HISTORY_LOOKBACK_MINUTES,
+            require_full_lookback_before_trading=REQUIRE_FULL_LOOKBACK_BEFORE_TRADING,
+            timeframe=TIMEFRAME,
+            message=warmup_message,
+        )
+
+        latest_closed = get_latest_closed_candle(candles)
+
+        if latest_closed is not None:
+            print(f"Latest closed candle: {latest_closed.name}")
+            print(
+                "OHLC: "
+                f"{latest_closed['open']} / "
+                f"{latest_closed['high']} / "
+                f"{latest_closed['low']} / "
+                f"{latest_closed['close']}"
+            )
+
+        print("MT5 connection and candle loading checks completed.")
+
+    finally:
+        shutdown_mt5()
 
 
 if __name__ == "__main__":
