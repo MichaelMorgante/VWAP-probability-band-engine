@@ -575,6 +575,10 @@ SETUP_PROFILES = {
 # LOGGING CONFIG
 # ============================================================
 
+WRITE_EVENT_LOG_TO_DISK = False
+WRITE_TRADE_STATE_LOG_TO_DISK = True
+PRINT_LOG_EVENTS = True
+
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
@@ -854,6 +858,7 @@ def log_event(event_type: str, **kwargs: Any) -> None:
         if key in row:
             row[key] = value
 
+if WRITE_EVENT_LOG_TO_DISK:
     file_exists = EVENT_LOG_PATH.exists()
 
     with EVENT_LOG_PATH.open("a", newline="") as f:
@@ -862,6 +867,7 @@ def log_event(event_type: str, **kwargs: Any) -> None:
             writer.writeheader()
         writer.writerow(row)
 
+if PRINT_LOG_EVENTS:
     print(f"[{row['timestamp']}] {event_type}: {kwargs.get('message', '')}")
 
 # ============================================================
@@ -4224,6 +4230,8 @@ def append_trade_state_record(
     state: LiveTradeState,
     source: str,
 ) -> None:
+    if not WRITE_TRADE_STATE_LOG_TO_DISK:
+        return
     record = asdict(state)
     record.update(
         {
