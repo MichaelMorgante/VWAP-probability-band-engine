@@ -41,12 +41,12 @@ except ImportError:
 SYMBOL = "US100.cash"
 TIMEFRAME = "M1"
 
-EXECUTION_MODE = "signal_only"
+EXECUTION_MODE = "place_orders"
 # options:
 # "signal_only"  = compute and log signals only
 # "place_orders" = full auto execution once MT5 execution is added
 
-LOT_SIZE = 60.0
+LOT_SIZE = 61.0
 
 MAGIC_NUMBER = 260710
 # MT5 identifier for this bot's trades.
@@ -57,7 +57,7 @@ ORDER_COMMENT = "VWAP_SIGMA_CONT"
 POLL_SECONDS = 1
 CANDLE_CONFIRMATION_DELAY_SECONDS = 2
 
-RUN_LIVE_LOOP_ON_STARTUP = False
+RUN_LIVE_LOOP_ON_STARTUP = True
 # False = connect, fetch candles, process one latest closed candle, then exit.
 # True  = continuously poll MT5 and process each new closed candle once.
 
@@ -65,8 +65,8 @@ ALLOW_LIVE_TRADING = False
 # False should prevent accidental live-account trading if account type can be detected.
 # Demo trading will be allowed once MT5 account checks are added.
 
-ORDER_EXECUTION_ARMED = False
-ORDER_EXECUTION_CONFIRMATION_TEXT = ""
+ORDER_EXECUTION_ARMED = True
+ORDER_EXECUTION_CONFIRMATION_TEXT = "I_ACCEPT_MT5_AUTO_EXECUTION_RISK"
 REQUIRED_ORDER_EXECUTION_CONFIRMATION_TEXT = "I_ACCEPT_MT5_AUTO_EXECUTION_RISK"
 # To allow place_orders mode, all must be true:
 # - EXECUTION_MODE = "place_orders"
@@ -78,7 +78,7 @@ REQUIRED_ORDER_EXECUTION_CONFIRMATION_TEXT = "I_ACCEPT_MT5_AUTO_EXECUTION_RISK"
 # MT5 CONNECTION CONFIG
 # ============================================================
 
-CONNECT_MT5_ON_STARTUP = False
+CONNECT_MT5_ON_STARTUP = True
 # False = do not connect when the script starts.
 # True  = test MT5 terminal connection and candle loading at startup.
 
@@ -126,7 +126,7 @@ LOG_MT5_SYMBOL_CONSTRAINTS = True
 
 TRADING_TIMEZONE = "Europe/London"
 
-NO_NEW_TRADES_AFTER = "19:00"
+NO_NEW_TRADES_AFTER = "23:59"
 
 USE_SESSION_FILTER = False
 SESSION_START = "14:30"
@@ -386,7 +386,7 @@ MAX_CONSECUTIVE_SL = 2
 # POSITION MANAGEMENT CONFIG
 # ============================================================
 
-ENABLE_POSITION_MANAGEMENT = False
+ENABLE_POSITION_MANAGEMENT = True
 # False = do not modify open positions.
 # True  = manage breakeven and runner trailing stops for bot positions.
 
