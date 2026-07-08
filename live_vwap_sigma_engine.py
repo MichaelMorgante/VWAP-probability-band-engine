@@ -877,17 +877,17 @@ def log_event(event_type: str, **kwargs: Any) -> None:
         if key in row:
             row[key] = value
 
-if WRITE_EVENT_LOG_TO_DISK:
-    file_exists = EVENT_LOG_PATH.exists()
+    if WRITE_EVENT_LOG_TO_DISK:
+        file_exists = EVENT_LOG_PATH.exists()
 
-    with EVENT_LOG_PATH.open("a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
+        with EVENT_LOG_PATH.open("a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(row)
 
-if PRINT_LOG_EVENTS:
-    print(f"[{row['timestamp']}] {event_type}: {kwargs.get('message', '')}")
+    if PRINT_LOG_EVENTS:
+        print(f"[{row['timestamp']}] {event_type}: {kwargs.get('message', '')}")
 
 # ============================================================
 # MT5 HELPERS
