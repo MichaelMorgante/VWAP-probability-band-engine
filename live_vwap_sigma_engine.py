@@ -352,6 +352,12 @@ SL_POINTS = 36.0
 TP_POINTS = 72.0
 BE_TRIGGER_POINTS = 36.0
 
+BROKER_TP_MODE = "runner_target"
+# options:
+# "fixed_tp"      = attach broker TP at TP_POINTS
+# "runner_target" = attach broker TP at setup-specific runner target
+# "none"          = attach no broker TP; bot/SL management only
+
 RUNNER_MODE = "always"
 # options should match notebook logic as it is ported
 
@@ -731,6 +737,10 @@ LOG_FIELDS = [
     "symbol_trade_freeze_level",
     "symbol_constraints_pass",
     "symbol_constraints_reason",
+    "broker_tp_mode",
+    "original_tp_price",
+    "broker_tp_price",
+    "runner_target_price",
     "message",
 ]
 
@@ -747,6 +757,9 @@ class TradeSignal:
     entry_price: float
     sl_price: float
     tp_price: float
+    original_tp_price: float
+    broker_tp_price: float
+    runner_target_price: float
     runner_target_r: float
     runner_target_points: float
     reason: str
@@ -761,6 +774,9 @@ class LiveTradeState:
     entry_price: float
     sl_price: float
     tp_price: float
+    original_tp_price: float
+    broker_tp_price: float
+    runner_target_price: float
     runner_target_r: float
     runner_target_points: float
     signal_time: Any
@@ -2843,9 +2859,26 @@ def build_trade_signal_from_classified_candidate(
     runner_target_r = get_runner_target_for_setup(candidate.setup_family)
     runner_target_points = runner_target_r * SL_POINTS
 
-    sl_price, tp_price = build_sl_tp(
+    sl_price = build_sl_price(
         direction=candidate.direction,
         entry_price=candidate.entry_price,
+    )
+
+    original_tp_price = build_fixed_tp_price(
+        direction=candidate.direction,
+        entry_price=candidate.entry_price,
+    )
+
+    runner_target_price = build_runner_target_price(
+        direction=candidate.direction,
+        entry_price=candidate.entry_price,
+        runner_target_points=runner_target_points,
+    )
+
+    broker_tp_price = build_broker_tp_price(
+        direction=candidate.direction,
+        entry_price=candidate.entry_price,
+        runner_target_points=runner_target_points,
     )
 
     reason = (
@@ -2853,7 +2886,12 @@ def build_trade_signal_from_classified_candidate(
         f"{candidate.reason}; regime={candidate.regime_label}; "
         f"red_shift={candidate.red_shift_points:.2f} "
         f"({candidate.red_shift_label}); "
-        f"runner_target_r={runner_target_r:.2f}"
+        f"broker_tp_mode={BROKER_TP_MODE}; "
+        f"original_tp_price={original_tp_price:.2f}; "
+        f"broker_tp_price={broker_tp_price:.2f}; "
+        f"runner_target_price={runner_target_price:.2f}; "
+        f"runner_target_r={runner_target_r:.2f}; "
+        f"runner_target_points={runner_target_points:.2f}"
     )
 
     return TradeSignal(
@@ -2862,7 +2900,10 @@ def build_trade_signal_from_classified_candidate(
         setup_family=candidate.setup_family,
         entry_price=candidate.entry_price,
         sl_price=sl_price,
-        tp_price=tp_price,
+        tp_price=broker_tp_price,
+        original_tp_price=original_tp_price,
+        broker_tp_price=broker_tp_price,
+        runner_target_price=runner_target_price,
         runner_target_r=runner_target_r,
         runner_target_points=runner_target_points,
         reason=reason,
@@ -2881,6 +2922,10 @@ def log_selected_continuation_signal(signal: TradeSignal) -> None:
         entry_price=signal.entry_price,
         sl_price=signal.sl_price,
         tp_price=signal.tp_price,
+        broker_tp_mode=BROKER_TP_MODE,
+        original_tp_price=signal.original_tp_price,
+        broker_tp_price=signal.broker_tp_price,
+        runner_target_price=signal.runner_target_price,
         runner_target_r=signal.runner_target_r,
         runner_target_points=signal.runner_target_points,
         decision="selected_signal",
@@ -3301,6 +3346,10 @@ def log_signal_only(signal: TradeSignal) -> None:
         entry_price=signal.entry_price,
         sl_price=signal.sl_price,
         tp_price=signal.tp_price,
+        broker_tp_mode=BROKER_TP_MODE,
+        original_tp_price=signal.original_tp_price,
+        broker_tp_price=signal.broker_tp_price,
+        runner_target_price=signal.runner_target_price,
         runner_target_r=signal.runner_target_r,
         runner_target_points=signal.runner_target_points,
         decision="signal_only",
@@ -3839,19 +3888,70 @@ def get_runner_target_points_for_setup(setup_family: str) -> float:
     return get_runner_target_for_setup(setup_family) * float(SL_POINTS)
 
 
-def build_sl_tp(direction: str, entry_price: float) -> tuple[float, float]:
+def build_sl_price(direction: str, entry_price: float) -> float:
     if direction == "BUY":
-        sl_price = entry_price - SL_POINTS
-        tp_price = entry_price + TP_POINTS
+        return entry_price - SL_POINTS
 
-    elif direction == "SELL":
-        sl_price = entry_price + SL_POINTS
-        tp_price = entry_price - TP_POINTS
+    if direction == "SELL":
+        return entry_price + SL_POINTS
 
-    else:
-        raise ValueError(f"Invalid direction: {direction}")
+    raise ValueError(f"Invalid direction: {direction}")
 
-    return sl_price, tp_price
+
+def build_fixed_tp_price(direction: str, entry_price: float) -> float:
+    if direction == "BUY":
+        return entry_price + TP_POINTS
+
+    if direction == "SELL":
+        return entry_price - TP_POINTS
+
+    raise ValueError(f"Invalid direction: {direction}")
+
+
+def build_runner_target_price(
+    direction: str,
+    entry_price: float,
+    runner_target_points: float,
+) -> float:
+    if direction == "BUY":
+        return entry_price + runner_target_points
+
+    if direction == "SELL":
+        return entry_price - runner_target_points
+
+    raise ValueError(f"Invalid direction: {direction}")
+
+
+def build_broker_tp_price(
+    direction: str,
+    entry_price: float,
+    runner_target_points: float,
+) -> float:
+    if BROKER_TP_MODE == "fixed_tp":
+        return build_fixed_tp_price(direction, entry_price)
+
+    if BROKER_TP_MODE == "runner_target":
+        return build_runner_target_price(
+            direction=direction,
+            entry_price=entry_price,
+            runner_target_points=runner_target_points,
+        )
+
+    if BROKER_TP_MODE == "none":
+        return 0.0
+
+    raise ValueError(f"Invalid BROKER_TP_MODE: {BROKER_TP_MODE}")
+
+
+def broker_tp_required() -> bool:
+    return BROKER_TP_MODE != "none"
+
+
+def build_sl_tp(direction: str, entry_price: float) -> tuple[float, float]:
+    return (
+        build_sl_price(direction, entry_price),
+        build_fixed_tp_price(direction, entry_price),
+    )
 
 def parse_hhmm_time(value: str, field_name: str) -> time:
     try:
@@ -4153,6 +4253,10 @@ def log_trade_state_event(
         entry_price=state.entry_price,
         sl_price=state.sl_price,
         tp_price=state.tp_price,
+        broker_tp_mode=BROKER_TP_MODE,
+        original_tp_price=state.original_tp_price,
+        broker_tp_price=state.broker_tp_price,
+        runner_target_price=state.runner_target_price,
         runner_target_r=state.runner_target_r,
         runner_target_points=state.runner_target_points,
         position_ticket=state.ticket,
@@ -4206,13 +4310,18 @@ def register_live_trade_state_from_fill(
         )
         return None
 
+    actual_broker_tp = float(getattr(position, "tp", signal.broker_tp_price) or signal.broker_tp_price)
+
     state = LiveTradeState(
         ticket=ticket,
         setup_family=signal.setup_family,
         direction=signal.direction,
         entry_price=float(getattr(position, "price_open", signal.entry_price) or signal.entry_price),
         sl_price=float(getattr(position, "sl", signal.sl_price) or signal.sl_price),
-        tp_price=float(getattr(position, "tp", signal.tp_price) or signal.tp_price),
+        tp_price=actual_broker_tp,
+        original_tp_price=float(signal.original_tp_price),
+        broker_tp_price=actual_broker_tp,
+        runner_target_price=float(signal.runner_target_price),
         runner_target_r=float(signal.runner_target_r),
         runner_target_points=float(signal.runner_target_points),
         signal_time=signal.signal_time,
@@ -4240,19 +4349,33 @@ def recover_live_trade_state_from_position(
 
     direction = position_direction_label(position)
 
+    entry_price = float(getattr(position, "price_open", 0.0) or 0.0)
+    broker_tp_price = float(getattr(position, "tp", 0.0) or 0.0)
+    runner_target_points = float(RUNNER_TARGET_R) * float(SL_POINTS)
+
     state = LiveTradeState(
         ticket=ticket,
         setup_family="UNKNOWN",
         direction=direction,
-        entry_price=float(getattr(position, "price_open", 0.0) or 0.0),
+        entry_price=entry_price,
         sl_price=float(getattr(position, "sl", 0.0) or 0.0),
-        tp_price=float(getattr(position, "tp", 0.0) or 0.0),
+        tp_price=broker_tp_price,
+        original_tp_price=build_fixed_tp_price(direction, entry_price)
+        if direction in {"BUY", "SELL"}
+        else broker_tp_price,
+        broker_tp_price=broker_tp_price,
+        runner_target_price=build_runner_target_price(
+            direction,
+            entry_price,
+            runner_target_points,
+        )
+        if direction in {"BUY", "SELL"}
+        else broker_tp_price,
         runner_target_r=float(RUNNER_TARGET_R),
-        runner_target_points=float(RUNNER_TARGET_R) * float(SL_POINTS),
+        runner_target_points=runner_target_points,
         signal_time="recovered_from_mt5",
         trail_state="RECOVERED",
     )
-
     return register_live_trade_state(
         state=state,
         action="recovered_from_mt5",
@@ -4649,20 +4772,52 @@ TRADE_STATE_REMOVAL_ACTIONS = {
 
 def build_trade_state_from_record(record: dict[str, Any]) -> LiveTradeState | None:
     try:
+        ticket = int(record["ticket"])
+        direction = str(record.get("direction", "UNKNOWN"))
+        entry_price = float(record.get("entry_price", 0.0))
+        broker_tp_price = float(
+            record.get(
+                "broker_tp_price",
+                record.get("tp_price", 0.0),
+            )
+        )
+        runner_target_points = float(
+            record.get(
+                "runner_target_points",
+                float(RUNNER_TARGET_R) * float(SL_POINTS),
+            )
+        )
+
         return LiveTradeState(
-            ticket=int(record["ticket"]),
+            ticket=ticket,
             setup_family=str(record.get("setup_family", "UNKNOWN")),
-            direction=str(record.get("direction", "UNKNOWN")),
-            entry_price=float(record.get("entry_price", 0.0)),
+            direction=direction,
+            entry_price=entry_price,
             sl_price=float(record.get("sl_price", 0.0)),
-            tp_price=float(record.get("tp_price", 0.0)),
-            runner_target_r=float(record.get("runner_target_r", RUNNER_TARGET_R)),
-            runner_target_points=float(
+            tp_price=float(record.get("tp_price", broker_tp_price)),
+            original_tp_price=float(
                 record.get(
-                    "runner_target_points",
-                    float(RUNNER_TARGET_R) * float(SL_POINTS),
+                    "original_tp_price",
+                    build_fixed_tp_price(direction, entry_price)
+                    if direction in {"BUY", "SELL"}
+                    else broker_tp_price,
                 )
             ),
+            broker_tp_price=broker_tp_price,
+            runner_target_price=float(
+                record.get(
+                    "runner_target_price",
+                    build_runner_target_price(
+                        direction,
+                        entry_price,
+                        runner_target_points,
+                    )
+                    if direction in {"BUY", "SELL"}
+                    else broker_tp_price,
+                )
+            ),
+            runner_target_r=float(record.get("runner_target_r", RUNNER_TARGET_R)),
+            runner_target_points=runner_target_points,
             signal_time=record.get("signal_time", "recovered_from_state_log"),
             trail_state=str(record.get("trail_state", "RECOVERED")),
         )
@@ -5044,11 +5199,16 @@ def validate_symbol_stop_distance_constraints(
             f"{sl_distance:.5f} < minimum {min_stop_distance:.5f}"
         )
 
-    if tp_distance < min_stop_distance:
-        return False, (
-            f"TP too close to order price: "
-            f"{tp_distance:.5f} < minimum {min_stop_distance:.5f}"
-        )
+    broker_tp_price = float(signal.broker_tp_price or 0.0)
+
+    if broker_tp_price > 0:
+        tp_distance = abs(broker_tp_price - order_price)
+
+        if tp_distance < min_stop_distance:
+            return False, (
+                f"TP too close to order price: "
+                f"{tp_distance:.5f} < minimum {min_stop_distance:.5f}"
+            )
 
     return True, "SL/TP stop-distance constraints passed"
 
@@ -5140,16 +5300,22 @@ def validate_signal_order_inputs(signal: TradeSignal) -> tuple[bool, str]:
     if signal.sl_price <= 0:
         return False, "SL price must be > 0"
 
-    if signal.tp_price <= 0:
-        return False, "TP price must be > 0"
+    if broker_tp_required() and signal.tp_price <= 0:
+        return False, "TP price must be > 0 when broker TP is enabled"
 
     if signal.direction == "BUY":
-        if not signal.sl_price < signal.entry_price < signal.tp_price:
-            return False, "Invalid BUY SL/entry/TP ordering"
+        if not signal.sl_price < signal.entry_price:
+            return False, "Invalid BUY SL/entry ordering"
+
+        if broker_tp_required() and not signal.entry_price < signal.tp_price:
+            return False, "Invalid BUY entry/TP ordering"
 
     if signal.direction == "SELL":
-        if not signal.tp_price < signal.entry_price < signal.sl_price:
-            return False, "Invalid SELL TP/entry/SL ordering"
+        if not signal.entry_price < signal.sl_price:
+            return False, "Invalid SELL entry/SL ordering"
+
+        if broker_tp_required() and not signal.tp_price < signal.entry_price:
+            return False, "Invalid SELL TP/entry ordering"
 
     return True, "Order inputs valid"
 
@@ -5278,8 +5444,9 @@ def verify_filled_position_has_sl_tp(position: Any, signal: TradeSignal) -> bool
 
     has_sl = position_sl != 0.0
     has_tp = position_tp != 0.0
+    tp_ok = has_tp or not broker_tp_required()
 
-    if has_sl and has_tp:
+    if has_sl and tp_ok:
         log_event(
             "HEARTBEAT",
             signal_time=signal.signal_time,
@@ -5288,7 +5455,11 @@ def verify_filled_position_has_sl_tp(position: Any, signal: TradeSignal) -> bool
             position_ticket=position_ticket,
             position_sl=position_sl,
             position_tp=position_tp,
-            message="Filled position has SL and TP attached",
+            broker_tp_mode=BROKER_TP_MODE,
+            original_tp_price=signal.original_tp_price,
+            broker_tp_price=signal.broker_tp_price,
+            runner_target_price=signal.runner_target_price,
+            message="Filled position has required SL/TP protection attached",
         )
 
         return True
@@ -5301,6 +5472,10 @@ def verify_filled_position_has_sl_tp(position: Any, signal: TradeSignal) -> bool
         position_ticket=position_ticket,
         position_sl=position_sl,
         position_tp=position_tp,
+        broker_tp_mode=BROKER_TP_MODE,
+        original_tp_price=signal.original_tp_price,
+        broker_tp_price=signal.broker_tp_price,
+        runner_target_price=signal.runner_target_price,
         block_reason="Filled position missing SL or TP",
         message="Filled position missing SL or TP",
     )
@@ -5326,6 +5501,10 @@ def place_trade(signal: TradeSignal) -> Any | None:
             entry_price=signal.entry_price,
             sl_price=signal.sl_price,
             tp_price=signal.tp_price,
+            broker_tp_mode=BROKER_TP_MODE,
+            original_tp_price=signal.original_tp_price,
+            broker_tp_price=signal.broker_tp_price,
+            runner_target_price=signal.runner_target_price,
             runner_target_r=signal.runner_target_r,
             runner_target_points=signal.runner_target_points,
             decision="blocked",
@@ -5368,6 +5547,10 @@ def place_trade(signal: TradeSignal) -> Any | None:
             entry_price=signal.entry_price,
             sl_price=signal.sl_price,
             tp_price=signal.tp_price,
+            broker_tp_mode=BROKER_TP_MODE,
+            original_tp_price=signal.original_tp_price,
+            broker_tp_price=signal.broker_tp_price,
+            runner_target_price=signal.runner_target_price,
             runner_target_r=signal.runner_target_r,
             runner_target_points=signal.runner_target_points,
             decision="blocked",
@@ -5378,6 +5561,8 @@ def place_trade(signal: TradeSignal) -> Any | None:
         )
 
         return None
+    
+    broker_tp_for_request = float(signal.broker_tp_price or 0.0)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -5386,7 +5571,7 @@ def place_trade(signal: TradeSignal) -> Any | None:
         "type": order_type,
         "price": price,
         "sl": signal.sl_price,
-        "tp": signal.tp_price,
+        "tp": broker_tp_for_request,
         "deviation": ORDER_DEVIATION_POINTS,
         "magic": MAGIC_NUMBER,
         "comment": ORDER_COMMENT,
@@ -5402,6 +5587,10 @@ def place_trade(signal: TradeSignal) -> Any | None:
         entry_price=signal.entry_price,
         sl_price=signal.sl_price,
         tp_price=signal.tp_price,
+        broker_tp_mode=BROKER_TP_MODE,
+        original_tp_price=signal.original_tp_price,
+        broker_tp_price=signal.broker_tp_price,
+        runner_target_price=signal.runner_target_price,
         runner_target_r=signal.runner_target_r,
         runner_target_points=signal.runner_target_points,
         order_type=signal.direction,
@@ -5453,6 +5642,10 @@ def place_trade(signal: TradeSignal) -> Any | None:
         entry_price=signal.entry_price,
         sl_price=signal.sl_price,
         tp_price=signal.tp_price,
+        broker_tp_mode=BROKER_TP_MODE,
+        original_tp_price=signal.original_tp_price,
+        broker_tp_price=signal.broker_tp_price,
+        runner_target_price=signal.runner_target_price,
         runner_target_r=signal.runner_target_r,
         runner_target_points=signal.runner_target_points,
         order_ticket=getattr(result, "order", ""),
@@ -5783,6 +5976,17 @@ def validate_config() -> None:
 
     if TP_POINTS <= 0:
         raise ValueError("TP_POINTS must be > 0")
+    
+    if BROKER_TP_MODE not in {"fixed_tp", "runner_target", "none"}:
+        raise ValueError(
+            "BROKER_TP_MODE must be one of: fixed_tp, runner_target, none"
+        )
+
+    if BROKER_TP_MODE == "none":
+        print("")
+        print("WARNING: BROKER_TP_MODE is set to none.")
+        print("No broker TP will be attached. The bot depends on SL/position management.")
+        print("")
 
     if BE_TRIGGER_POINTS <= 0:
         raise ValueError("BE_TRIGGER_POINTS must be > 0")
@@ -5879,6 +6083,26 @@ def validate_config() -> None:
             raise ValueError(
                 f"Invalid runner_target_r for {setup_family}: {runner_target}"
             )
+        
+    if BROKER_TP_MODE == "runner_target":
+        for setup_family, profile in SETUP_PROFILES.items():
+            if not bool(profile.get("enabled", False)):
+                continue
+
+            runner_target_r = get_runner_target_for_setup(setup_family)
+            runner_target_points = get_runner_target_points_for_setup(setup_family)
+
+            if runner_target_r <= 0:
+                raise ValueError(
+                    f"Invalid runner target R for broker TP mode on {setup_family}: "
+                    f"{runner_target_r}"
+                )
+
+            if runner_target_points <= 0:
+                raise ValueError(
+                    f"Invalid runner target points for broker TP mode on {setup_family}: "
+                    f"{runner_target_points}"
+                )
 
     for setup_family, rule in ROUTER_BYPASS_RULES.items():
         trend_health_mode = rule.get("trend_health_mode")
@@ -5973,6 +6197,8 @@ def print_startup_config() -> None:
     print(f"- Strategy filter mode: {STRATEGY_FILTER_MODE}")
     print(f"- SL points: {SL_POINTS}")
     print(f"- TP points: {TP_POINTS}")
+    print(f"- Fixed TP points: {TP_POINTS}")
+    print(f"- Broker TP mode: {BROKER_TP_MODE}")
     print(f"- BE trigger: {BE_TRIGGER_POINTS}")
     print(f"- Runner mode: {RUNNER_MODE}")
     print(f"- Global runner target fallback: {RUNNER_TARGET_R}")
