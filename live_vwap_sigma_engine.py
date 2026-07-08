@@ -18,6 +18,7 @@ import importlib
 import json
 import sys
 import time as time_module
+import warnings
 from dataclasses import dataclass, asdict
 from datetime import datetime, time, timedelta, timezone
 from math import ceil
@@ -27,6 +28,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 import pandas as pd
+from pandas.errors import PerformanceWarning
 
 try:
     import MetaTrader5 as mt5
@@ -507,9 +509,9 @@ SETUP_PROFILES = {
         "use_red_shift_floor": False,
         "min_directional_red_shift_points": DEFAULT_S_TIER_RED_SHIFT_POINTS,
 
-        "allow_in_volatile_trend": False,
+        "allow_in_volatile_trend": True,
         "volatile_require_red_shift_floor": True,
-        "volatile_min_directional_red_shift_points": 3.75,
+        "volatile_min_directional_red_shift_points": 13.50,
 
         "use_candle_quality_filter": True,
         "use_extension_filter": True,
@@ -591,6 +593,7 @@ SETUP_PROFILES = {
 WRITE_EVENT_LOG_TO_DISK = False
 WRITE_TRADE_STATE_LOG_TO_DISK = True
 PRINT_LOG_EVENTS = True
+SUPPRESS_PANDAS_PERFORMANCE_WARNINGS = True
 
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -888,6 +891,10 @@ def log_event(event_type: str, **kwargs: Any) -> None:
 
     if PRINT_LOG_EVENTS:
         print(f"[{row['timestamp']}] {event_type}: {kwargs.get('message', '')}")
+
+def configure_runtime_warnings() -> None:
+    if SUPPRESS_PANDAS_PERFORMANCE_WARNINGS:
+        warnings.simplefilter("ignore", PerformanceWarning)
 
 # ============================================================
 # MT5 HELPERS
@@ -6381,6 +6388,7 @@ def print_startup_config() -> None:
 # ============================================================
 
 def main() -> None:
+    configure_runtime_warnings()
     validate_config()
     bot_start_time = get_bot_start_time()
 
