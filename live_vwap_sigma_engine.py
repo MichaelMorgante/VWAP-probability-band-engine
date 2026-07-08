@@ -272,6 +272,15 @@ LOG_RAW_CONTINUATION_CANDIDATES = True
 # They are not promoted to executable TradeSignal objects in this commit.
 
 # ============================================================
+# NO-SIGNAL DIAGNOSTICS CONFIG
+# ============================================================
+
+ENABLE_NO_SIGNAL_DIAGNOSTICS = True
+PRINT_NO_SIGNAL_DIAGNOSTICS = True
+LOG_NO_SIGNAL_DIAGNOSTICS = True
+# Diagnostics only. Does not change signal selection, routing, or execution.
+
+# ============================================================
 # SETUP CLASSIFICATION CONFIG
 # ============================================================
 
@@ -767,6 +776,35 @@ LOG_FIELDS = [
     "current_trading_time",
     "candle_time_sanity_pass",
     "candle_time_sanity_reason",
+    "no_signal_stage",
+    "no_signal_reason",
+    "no_signal_long_raw_pass",
+    "no_signal_short_raw_pass",
+    "no_signal_regime",
+    "no_signal_long_red_shift_points",
+    "no_signal_short_red_shift_points",
+    "no_signal_long_red_shift_label",
+    "no_signal_short_red_shift_label",
+    "no_signal_long_trend_health",
+    "no_signal_short_trend_health",
+    "no_signal_long_extension_points",
+    "no_signal_short_extension_points",
+    "no_signal_long_close_through_green_points",
+    "no_signal_short_close_through_green_points",
+    "no_signal_body_ratio",
+    "no_signal_possible_chop",
+    "no_signal_vwap_acceptance_long",
+    "no_signal_vwap_acceptance_short",
+    "no_signal_long_body_valid",
+    "no_signal_short_body_valid",
+    "no_signal_long_close_through_green_valid",
+    "no_signal_short_close_through_green_valid",
+    "no_signal_long_extension_valid",
+    "no_signal_short_extension_valid",
+    "no_signal_long_not_orange_chase",
+    "no_signal_short_not_orange_chase",
+    "no_signal_classified_count",
+    "no_signal_routed_count",
     "message",
 ]
 
@@ -3291,6 +3329,359 @@ def apply_regime_router_to_classified_candidates(
     return routed_candidates
 
 # ============================================================
+# NO-SIGNAL DIAGNOSTICS
+# ============================================================
+
+def diagnostic_bool_text(value: Any) -> str:
+    return "True" if safe_bool(value) else "False"
+
+
+def diagnostic_float_text(value: Any, digits: int = 2) -> str:
+    numeric_value = safe_float(value, default=np.nan)
+
+    if pd.isna(numeric_value):
+        return "nan"
+
+    return f"{numeric_value:.{digits}f}"
+
+
+def explain_raw_continuation_failure(row: pd.Series, direction: str) -> str:
+    if direction == "BUY":
+        checks = {
+            "touch": row.get("long_touched_upper_green"),
+            "close_above_green": row.get("long_closed_above_upper_green"),
+            "vwap_acceptance": row.get("v3_long_vwap_acceptance_pass"),
+            "red_shift_pass": row.get("v3_long_directional_red_shift_pass"),
+            "quality_pass": row.get("v3_long_v1_execution_quality_pass"),
+            "close_through_valid": row.get("long_close_through_green_valid"),
+            "body_valid": row.get("long_body_valid"),
+            "not_orange_chase": row.get("long_not_orange_chase"),
+            "extension_valid": row.get("long_extension_valid"),
+        }
+
+        context = (
+            f"red_shift={diagnostic_float_text(row.get('v3_long_directional_red_shift'))}, "
+            f"red_shift_label={row.get('v3_long_red_shift_bucket', '')}, "
+            f"trend_health={diagnostic_bool_text(row.get('v2_long_trend_health_pass'))}, "
+            f"extension={diagnostic_float_text(row.get('long_extension_from_green_points'))}, "
+            f"close_through={diagnostic_float_text(row.get('long_close_through_green_points'))}, "
+            f"body_ratio={diagnostic_float_text(row.get('body_ratio'))}, "
+            f"possible_chop={diagnostic_bool_text(row.get('possible_chop'))}"
+        )
+
+    elif direction == "SELL":
+        checks = {
+            "touch": row.get("short_touched_lower_green"),
+            "close_below_green": row.get("short_closed_below_lower_green"),
+            "vwap_acceptance": row.get("v3_short_vwap_acceptance_pass"),
+            "red_shift_pass": row.get("v3_short_directional_red_shift_pass"),
+            "quality_pass": row.get("v3_short_v1_execution_quality_pass"),
+            "close_through_valid": row.get("short_close_through_green_valid"),
+            "body_valid": row.get("short_body_valid"),
+            "not_orange_chase": row.get("short_not_orange_chase"),
+            "extension_valid": row.get("short_extension_valid"),
+        }
+
+        context = (
+            f"red_shift={diagnostic_float_text(row.get('v3_short_directional_red_shift'))}, "
+            f"red_shift_label={row.get('v3_short_red_shift_bucket', '')}, "
+            f"trend_health={diagnostic_bool_text(row.get('v2_short_trend_health_pass'))}, "
+            f"extension={diagnostic_float_text(row.get('short_extension_from_green_points'))}, "
+            f"close_through={diagnostic_float_text(row.get('short_close_through_green_points'))}, "
+            f"body_ratio={diagnostic_float_text(row.get('body_ratio'))}, "
+            f"possible_chop={diagnostic_bool_text(row.get('possible_chop'))}"
+        )
+
+    else:
+        return f"{direction} raw diagnostic unavailable"
+
+    failed_checks = [
+        name
+        for name, value in checks.items()
+        if not safe_bool(value)
+    ]
+
+    if not failed_checks:
+        failed_text = "raw checks passed"
+    else:
+        failed_text = "failed=" + ",".join(failed_checks)
+
+    return f"{direction}: {failed_text}; {context}"
+
+
+def explain_setup_classification_rejection(
+    row: pd.Series,
+    candidate: RawContinuationCandidate,
+) -> str:
+    rejection_reasons: list[str] = []
+
+    for setup_family in SETUP_CLASSIFICATION_PRIORITY:
+        if not setup_profile_enabled(setup_family):
+            rejection_reasons.append(f"{setup_family}=disabled")
+            continue
+
+        family_pass, family_reason = setup_family_specific_candidate_pass(
+            setup_family=setup_family,
+            row=row,
+            candidate=candidate,
+        )
+
+        if not family_pass:
+            rejection_reasons.append(f"{setup_family}={family_reason}")
+            continue
+
+        (
+            red_shift_floor_pass,
+            setup_trend_health_pass,
+            setup_extension_pass,
+        ) = setup_quality_passes(
+            setup_family=setup_family,
+            candidate=candidate,
+        )
+
+        if not red_shift_floor_pass:
+            rejection_reasons.append(
+                f"{setup_family}=red_shift_floor_failed "
+                f"{candidate.red_shift_points:.2f} < {setup_min_red_shift_points(setup_family):.2f}"
+            )
+            continue
+
+        if not setup_trend_health_pass:
+            rejection_reasons.append(f"{setup_family}=trend_health_failed")
+            continue
+
+        if not setup_extension_pass:
+            max_extension = setup_max_extension_from_green_points(setup_family)
+            rejection_reasons.append(
+                f"{setup_family}=extension_failed "
+                f"{candidate.extension_from_green_points:.2f} > {max_extension}"
+            )
+            continue
+
+        rejection_reasons.append(f"{setup_family}=would_classify")
+
+    return (
+        f"{candidate.direction} raw candidate not classified: "
+        + " | ".join(rejection_reasons)
+    )
+
+
+def explain_classification_rejections(
+    row: pd.Series,
+    raw_candidates: list[RawContinuationCandidate],
+) -> str:
+    if not raw_candidates:
+        return "No raw candidates available for classification"
+
+    return " || ".join(
+        explain_setup_classification_rejection(row, candidate)
+        for candidate in raw_candidates
+    )
+
+
+def explain_router_rejections(
+    classified_candidates: list[ClassifiedContinuationCandidate],
+) -> str:
+    if not classified_candidates:
+        return "No classified candidates available for router diagnostics"
+
+    explanations: list[str] = []
+
+    for candidate in classified_candidates:
+        router_pass, router_reason = regime_router_decision(candidate)
+        bypass_pass, bypass_reason = router_bypass_decision(candidate)
+
+        explanations.append(
+            f"{candidate.setup_family} {candidate.direction}: "
+            f"regime={candidate_regime_label(candidate)}, "
+            f"router_pass={router_pass}, router_reason={router_reason}, "
+            f"bypass_pass={bypass_pass}, bypass_reason={bypass_reason}, "
+            f"red_shift={candidate.red_shift_points:.2f}, "
+            f"trend_health={candidate.trend_health_pass}, "
+            f"extension={candidate.extension_from_green_points:.2f}"
+        )
+
+    return " || ".join(explanations)
+
+
+def build_no_signal_diagnostic(
+    latest_row: pd.Series | None,
+    raw_candidates: list[RawContinuationCandidate],
+    classified_candidates: list[ClassifiedContinuationCandidate],
+    routed_candidates: list[ClassifiedContinuationCandidate],
+    selected_signal: TradeSignal | None,
+) -> dict[str, Any]:
+    if selected_signal is not None:
+        return {
+            "no_signal_stage": "SIGNAL_SELECTED",
+            "no_signal_reason": "Signal selected; no no-signal diagnostic required",
+        }
+
+    if latest_row is None:
+        return {
+            "no_signal_stage": "NO_FEATURES",
+            "no_signal_reason": "No latest feature row available",
+            "no_signal_classified_count": len(classified_candidates),
+            "no_signal_routed_count": len(routed_candidates),
+        }
+
+    long_raw_pass = raw_long_continuation_pass(latest_row)
+    short_raw_pass = raw_short_continuation_pass(latest_row)
+
+    if not raw_candidates:
+        stage = "NO_RAW_CANDIDATE"
+        reason = (
+            explain_raw_continuation_failure(latest_row, "BUY")
+            + " || "
+            + explain_raw_continuation_failure(latest_row, "SELL")
+        )
+
+    elif not classified_candidates:
+        stage = "NO_CLASSIFIED_CANDIDATE"
+        reason = explain_classification_rejections(
+            row=latest_row,
+            raw_candidates=raw_candidates,
+        )
+
+    elif not routed_candidates:
+        stage = "NO_ROUTED_CANDIDATE"
+        reason = explain_router_rejections(classified_candidates)
+
+    else:
+        stage = "NO_SELECTED_SIGNAL"
+        reason = (
+            "Routed candidates existed but no final signal was selected. "
+            "Check signal-promotion toggles and selection mode."
+        )
+
+    return {
+        "no_signal_stage": stage,
+        "no_signal_reason": reason,
+        "no_signal_long_raw_pass": long_raw_pass,
+        "no_signal_short_raw_pass": short_raw_pass,
+        "no_signal_regime": latest_row.get("v5_regime_20m", ""),
+        "no_signal_long_red_shift_points": safe_float(
+            latest_row.get("v3_long_directional_red_shift")
+        ),
+        "no_signal_short_red_shift_points": safe_float(
+            latest_row.get("v3_short_directional_red_shift")
+        ),
+        "no_signal_long_red_shift_label": latest_row.get("v3_long_red_shift_bucket", ""),
+        "no_signal_short_red_shift_label": latest_row.get("v3_short_red_shift_bucket", ""),
+        "no_signal_long_trend_health": safe_bool(
+            latest_row.get("v2_long_trend_health_pass")
+        ),
+        "no_signal_short_trend_health": safe_bool(
+            latest_row.get("v2_short_trend_health_pass")
+        ),
+        "no_signal_long_extension_points": safe_float(
+            latest_row.get("long_extension_from_green_points")
+        ),
+        "no_signal_short_extension_points": safe_float(
+            latest_row.get("short_extension_from_green_points")
+        ),
+        "no_signal_long_close_through_green_points": safe_float(
+            latest_row.get("long_close_through_green_points")
+        ),
+        "no_signal_short_close_through_green_points": safe_float(
+            latest_row.get("short_close_through_green_points")
+        ),
+        "no_signal_body_ratio": safe_float(latest_row.get("body_ratio")),
+        "no_signal_possible_chop": safe_bool(latest_row.get("possible_chop")),
+        "no_signal_vwap_acceptance_long": safe_bool(
+            latest_row.get("v3_long_vwap_acceptance_pass")
+        ),
+        "no_signal_vwap_acceptance_short": safe_bool(
+            latest_row.get("v3_short_vwap_acceptance_pass")
+        ),
+        "no_signal_long_body_valid": safe_bool(latest_row.get("long_body_valid")),
+        "no_signal_short_body_valid": safe_bool(latest_row.get("short_body_valid")),
+        "no_signal_long_close_through_green_valid": safe_bool(
+            latest_row.get("long_close_through_green_valid")
+        ),
+        "no_signal_short_close_through_green_valid": safe_bool(
+            latest_row.get("short_close_through_green_valid")
+        ),
+        "no_signal_long_extension_valid": safe_bool(
+            latest_row.get("long_extension_valid")
+        ),
+        "no_signal_short_extension_valid": safe_bool(
+            latest_row.get("short_extension_valid")
+        ),
+        "no_signal_long_not_orange_chase": safe_bool(
+            latest_row.get("long_not_orange_chase")
+        ),
+        "no_signal_short_not_orange_chase": safe_bool(
+            latest_row.get("short_not_orange_chase")
+        ),
+        "no_signal_classified_count": len(classified_candidates),
+        "no_signal_routed_count": len(routed_candidates),
+    }
+
+
+def compact_no_signal_diagnostic_line(
+    signal_time: Any,
+    diagnostic: dict[str, Any],
+) -> str:
+    return (
+        "NO_SIGNAL_DIAGNOSTIC"
+        f" | time={signal_time}"
+        f" | stage={diagnostic.get('no_signal_stage', '')}"
+        f" | regime={diagnostic.get('no_signal_regime', '')}"
+        f" | long_raw={diagnostic.get('no_signal_long_raw_pass', '')}"
+        f" | short_raw={diagnostic.get('no_signal_short_raw_pass', '')}"
+        f" | long_red_shift={diagnostic_float_text(diagnostic.get('no_signal_long_red_shift_points'))}"
+        f" | short_red_shift={diagnostic_float_text(diagnostic.get('no_signal_short_red_shift_points'))}"
+        f" | long_close_through={diagnostic_float_text(diagnostic.get('no_signal_long_close_through_green_points'))}"
+        f" | short_close_through={diagnostic_float_text(diagnostic.get('no_signal_short_close_through_green_points'))}"
+        f" | body_ratio={diagnostic_float_text(diagnostic.get('no_signal_body_ratio'))}"
+        f" | reason={diagnostic.get('no_signal_reason', '')}"
+    )
+
+
+def emit_no_signal_diagnostic(
+    signal_time: Any,
+    latest_feature_time: Any,
+    diagnostic: dict[str, Any],
+    raw_candidate_count: int,
+    classified_candidate_count: int,
+    routed_candidate_count: int,
+    latest_row: pd.Series | None,
+) -> None:
+    if not ENABLE_NO_SIGNAL_DIAGNOSTICS:
+        return
+
+    if diagnostic.get("no_signal_stage") == "SIGNAL_SELECTED":
+        return
+
+    diagnostic_message = compact_no_signal_diagnostic_line(
+        signal_time=signal_time,
+        diagnostic=diagnostic,
+    )
+
+    if PRINT_NO_SIGNAL_DIAGNOSTICS:
+        print(diagnostic_message)
+
+    if not LOG_NO_SIGNAL_DIAGNOSTICS:
+        return
+
+    log_event(
+        "NO_SIGNAL_DIAGNOSTIC",
+        signal_time=signal_time,
+        latest_feature_time=latest_feature_time,
+        decision="no_signal",
+        raw_candidate_count=raw_candidate_count,
+        classified_candidate_count=classified_candidate_count,
+        router_pass=routed_candidate_count > 0,
+        router_reason=diagnostic.get("no_signal_reason", ""),
+        latest_regime_label=latest_row.get("v5_regime_20m", "") if latest_row is not None else "",
+        latest_long_trend_health=latest_row.get("v2_long_trend_health_pass", "") if latest_row is not None else "",
+        latest_short_trend_health=latest_row.get("v2_short_trend_health_pass", "") if latest_row is not None else "",
+        message=diagnostic_message,
+        **diagnostic,
+    )
+
+# ============================================================
 # SIGNAL PROCESSING SHELL
 # ============================================================
 
@@ -3318,6 +3709,24 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
     features_df = compute_live_feature_context(closed_candles)
 
     if features_df.empty:
+        diagnostic = build_no_signal_diagnostic(
+            latest_row=None,
+            raw_candidates=[],
+            classified_candidates=[],
+            routed_candidates=[],
+            selected_signal=None,
+        )
+
+        emit_no_signal_diagnostic(
+            signal_time=latest_closed.name,
+            latest_feature_time="",
+            diagnostic=diagnostic,
+            raw_candidate_count=0,
+            classified_candidate_count=0,
+            routed_candidate_count=0,
+            latest_row=None,
+        )
+
         return None
 
     latest_feature_row = features_df.iloc[-1]
@@ -3339,6 +3748,25 @@ def build_signal_from_live_context(candles: pd.DataFrame) -> TradeSignal | None:
     )
 
     selected_signal = promote_classified_candidates_to_signal(routed_candidates)
+
+    if selected_signal is None and ENABLE_NO_SIGNAL_DIAGNOSTICS:
+        diagnostic = build_no_signal_diagnostic(
+            latest_row=latest_feature_row,
+            raw_candidates=raw_candidates,
+            classified_candidates=classified_candidates,
+            routed_candidates=routed_candidates,
+            selected_signal=selected_signal,
+        )
+
+        emit_no_signal_diagnostic(
+            signal_time=latest_closed.name,
+            latest_feature_time=latest_feature_row["datetime"],
+            diagnostic=diagnostic,
+            raw_candidate_count=len(raw_candidates),
+            classified_candidate_count=len(classified_candidates),
+            routed_candidate_count=len(routed_candidates),
+            latest_row=latest_feature_row,
+        )
 
     decision = "signal_selected" if selected_signal is not None else "no_signal"
 
@@ -6040,6 +6468,14 @@ def validate_config() -> None:
         print("WARNING: LOG_RAW_CONTINUATION_CANDIDATES is True but raw candidate detection is disabled.")
         print("")
 
+    for toggle_name, toggle_value in {
+        "ENABLE_NO_SIGNAL_DIAGNOSTICS": ENABLE_NO_SIGNAL_DIAGNOSTICS,
+        "PRINT_NO_SIGNAL_DIAGNOSTICS": PRINT_NO_SIGNAL_DIAGNOSTICS,
+        "LOG_NO_SIGNAL_DIAGNOSTICS": LOG_NO_SIGNAL_DIAGNOSTICS,
+    }.items():
+        if not isinstance(toggle_value, bool):
+            raise ValueError(f"{toggle_name} must be True or False")
+
     if ENABLE_SETUP_CLASSIFICATION and not ENABLE_RAW_CONTINUATION_CANDIDATES:
         raise ValueError(
             "ENABLE_SETUP_CLASSIFICATION requires ENABLE_RAW_CONTINUATION_CANDIDATES"
@@ -6282,6 +6718,9 @@ def print_startup_config() -> None:
     print(f"- Require src feature engine: {REQUIRE_SRC_FEATURE_ENGINE}")
     print(f"- Enable raw continuation candidates: {ENABLE_RAW_CONTINUATION_CANDIDATES}")
     print(f"- Log raw continuation candidates: {LOG_RAW_CONTINUATION_CANDIDATES}")
+    print(f"- No-signal diagnostics enabled: {ENABLE_NO_SIGNAL_DIAGNOSTICS}")
+    print(f"- Print no-signal diagnostics: {PRINT_NO_SIGNAL_DIAGNOSTICS}")
+    print(f"- Log no-signal diagnostics: {LOG_NO_SIGNAL_DIAGNOSTICS}")
     print(f"- Enable setup classification: {ENABLE_SETUP_CLASSIFICATION}")
     print(f"- Log setup classification: {LOG_SETUP_CLASSIFICATION}")
     print(f"- Setup classification priority: {SETUP_CLASSIFICATION_PRIORITY}")
