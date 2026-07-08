@@ -26,3 +26,8 @@ artifacts/**
 !artifacts/
 !artifacts/report_charts/
 !artifacts/report_charts/*.png
+
+# Live engine runtime logs
+logs/*.csv
+logs/*.jsonl
+!logs/.gitkeep
