@@ -126,6 +126,19 @@ LOG_MT5_SYMBOL_CONSTRAINTS = True
 
 TRADING_TIMEZONE = "Europe/London"
 
+MT5_TIME_MODE = "server_local"
+# options:
+# "utc"          = MT5 candle timestamps are UTC epoch seconds
+# "server_local" = MT5 candle timestamps should be interpreted as broker/server local time
+
+MT5_SERVER_TIMEZONE = "Europe/Athens"
+# FTMO server time is normally London + 2 hours.
+# Europe/Athens keeps that relationship through DST in most normal periods.
+
+ENABLE_CANDLE_TIME_SANITY_CHECK = True
+MAX_LATEST_CANDLE_FUTURE_SECONDS = 120
+MAX_LATEST_CANDLE_STALE_MINUTES = 10
+
 NO_NEW_TRADES_AFTER = "23:59"
 
 USE_SESSION_FILTER = False
@@ -745,6 +758,12 @@ LOG_FIELDS = [
     "original_tp_price",
     "broker_tp_price",
     "runner_target_price",
+    "mt5_time_mode",
+    "mt5_server_timezone",
+    "trading_timezone",
+    "current_trading_time",
+    "candle_time_sanity_pass",
+    "candle_time_sanity_reason",
     "message",
 ]
 
@@ -1143,8 +1162,7 @@ def fetch_recent_candles() -> pd.DataFrame:
 
         return candles
 
-    candles["time"] = pd.to_datetime(candles["time"], unit="s", utc=True)
-    candles["time"] = candles["time"].dt.tz_convert(TRADING_TIMEZONE)
+    candles["time"] = convert_mt5_candle_time_to_trading_timezone(candles["time"])
 
     candles = candles.set_index("time").sort_index()
 
@@ -1172,6 +1190,9 @@ def fetch_recent_candles() -> pd.DataFrame:
         bars_requested=bars_requested,
         candles_loaded=len(candles),
         history_lookback_minutes=HISTORY_LOOKBACK_MINUTES,
+        mt5_time_mode=MT5_TIME_MODE,
+        mt5_server_timezone=MT5_SERVER_TIMEZONE,
+        trading_timezone=TRADING_TIMEZONE,
         message=f"Fetched {len(candles)} candles from MT5",
     )
 
@@ -3831,6 +3852,26 @@ def run_single_engine_cycle(bot_start_time: datetime) -> None:
 
     manage_open_positions()
 
+    candle_time_ok, candle_time_message = validate_latest_candle_time(candles)
+    latest_closed = get_latest_closed_candle(candles)
+    now_dt = get_trading_now()
+
+    log_event(
+        "HEARTBEAT" if candle_time_ok else "CRITICAL",
+        loop_iteration=loop_iteration,
+        latest_closed_time=latest_closed.name if latest_closed is not None else "",
+        current_trading_time=now_dt,
+        mt5_time_mode=MT5_TIME_MODE,
+        mt5_server_timezone=MT5_SERVER_TIMEZONE,
+        trading_timezone=TRADING_TIMEZONE,
+        candle_time_sanity_pass=candle_time_ok,
+        candle_time_sanity_reason=candle_time_message,
+        message=candle_time_message,
+    )
+
+    if not candle_time_ok:
+        return
+
     process_latest_closed_candle(
         candles=candles,
         bot_start_time=bot_start_time,
@@ -3971,6 +4012,32 @@ def get_timezone(timezone_name: str) -> ZoneInfo:
         return ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError as exc:
         raise ValueError(f"Invalid timezone: {timezone_name}") from exc
+    
+def convert_mt5_candle_time_to_trading_timezone(raw_time_series: pd.Series) -> pd.Series:
+    if MT5_TIME_MODE == "utc":
+        return (
+            pd.to_datetime(raw_time_series, unit="s", utc=True, errors="coerce")
+            .dt.tz_convert(TRADING_TIMEZONE)
+        )
+
+    if MT5_TIME_MODE == "server_local":
+        server_timezone = get_timezone(MT5_SERVER_TIMEZONE)
+
+        raw_times = pd.to_datetime(
+            raw_time_series,
+            unit="s",
+            errors="coerce",
+        )
+
+        server_times = raw_times.dt.tz_localize(
+            server_timezone,
+            ambiguous="infer",
+            nonexistent="shift_forward",
+        )
+
+        return server_times.dt.tz_convert(TRADING_TIMEZONE)
+
+    raise ValueError(f"Invalid MT5_TIME_MODE: {MT5_TIME_MODE}")
 
 
 def get_bot_start_time() -> datetime:
@@ -4066,6 +4133,44 @@ def get_trading_now(now: datetime | None = None) -> datetime:
         return datetime.now(timezone_obj)
 
     return to_timezone_aware_datetime(now, TRADING_TIMEZONE)
+
+def validate_latest_candle_time(candles: pd.DataFrame) -> tuple[bool, str]:
+    if not ENABLE_CANDLE_TIME_SANITY_CHECK:
+        return True, "Candle time sanity check disabled"
+
+    latest_closed = get_latest_closed_candle(candles)
+
+    if latest_closed is None:
+        return True, "No latest closed candle available yet"
+
+    latest_time = to_timezone_aware_datetime(
+        latest_closed.name,
+        TRADING_TIMEZONE,
+    )
+
+    now_dt = get_trading_now()
+
+    future_seconds = (latest_time - now_dt).total_seconds()
+    stale_minutes = (now_dt - latest_time).total_seconds() / 60.0
+
+    if future_seconds > MAX_LATEST_CANDLE_FUTURE_SECONDS:
+        return False, (
+            f"Latest closed candle appears too far in the future: "
+            f"latest={latest_time}, now={now_dt}, "
+            f"future_seconds={future_seconds:.1f}"
+        )
+
+    if stale_minutes > MAX_LATEST_CANDLE_STALE_MINUTES:
+        return False, (
+            f"Latest closed candle appears stale: "
+            f"latest={latest_time}, now={now_dt}, "
+            f"stale_minutes={stale_minutes:.1f}"
+        )
+
+    return True, (
+        f"Latest closed candle time sanity passed: "
+        f"latest={latest_time}, now={now_dt}"
+    )
 
 
 def is_after_no_new_trades_time(now: datetime | None = None) -> bool:
@@ -6078,6 +6183,17 @@ def validate_config() -> None:
     get_timezone(TRADING_TIMEZONE)
     get_timezone(MARKET_OPEN_TIMEZONE)
 
+    if MT5_TIME_MODE not in {"utc", "server_local"}:
+        raise ValueError("MT5_TIME_MODE must be one of: utc, server_local")
+
+    get_timezone(MT5_SERVER_TIMEZONE)
+
+    if MAX_LATEST_CANDLE_FUTURE_SECONDS < 0:
+        raise ValueError("MAX_LATEST_CANDLE_FUTURE_SECONDS must be >= 0")
+
+    if MAX_LATEST_CANDLE_STALE_MINUTES <= 0:
+        raise ValueError("MAX_LATEST_CANDLE_STALE_MINUTES must be > 0")
+
     if MIN_WARMUP_CANDLES > HISTORY_LOOKBACK_MINUTES:
         print("")
         print("WARNING: MIN_WARMUP_CANDLES is greater than HISTORY_LOOKBACK_MINUTES.")
@@ -6215,6 +6331,11 @@ def print_startup_config() -> None:
     print(f"- Max daily loss R: {MAX_DAILY_LOSS_R}")
     print(f"- Max consecutive SL: {MAX_CONSECUTIVE_SL}")
     print(f"- No new trades after: {NO_NEW_TRADES_AFTER} {TRADING_TIMEZONE}")
+    print(f"- MT5 time mode: {MT5_TIME_MODE}")
+    print(f"- MT5 server timezone: {MT5_SERVER_TIMEZONE}")
+    print(f"- Candle time sanity check enabled: {ENABLE_CANDLE_TIME_SANITY_CHECK}")
+    print(f"- Max latest candle future seconds: {MAX_LATEST_CANDLE_FUTURE_SECONDS}")
+    print(f"- Max latest candle stale minutes: {MAX_LATEST_CANDLE_STALE_MINUTES}")
     print(f"- Session filter enabled: {USE_SESSION_FILTER}")
     print(f"- Session start: {SESSION_START}")
     print(f"- Session end: {SESSION_END}")
