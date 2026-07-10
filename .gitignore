@@ -31,3 +31,5 @@ artifacts/**
 logs/*.csv
 logs/*.jsonl
 !logs/.gitkeep
+
+research_outputs/experiment_snapshots/
