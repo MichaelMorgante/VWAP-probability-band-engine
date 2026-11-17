@@ -239,7 +239,7 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 continue
 
             bar_time = rates[0]['time']
-            if bar_time == last_bar_time:
+            if last_bar_time is not None and bar_time <= last_bar_time:
                 time.sleep(1)
                 continue
 
@@ -462,27 +462,49 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
     output_path = mt5_files_dir / "live_state.json"
 
     # ── Warm up engine ──
-    warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
+    startup_replay_active = (
+        session_info is not None
+        and session_info.get("mode") in {"manual", "preset"}
+    )
+    if startup_replay_active:
+        if initial_df is None or not session_info.get("startup_rebuild_used"):
+            raise RuntimeError("Could not rebuild the anchored session. Check MT5 history.")
 
-    if 'sessions' in config:
-        try:
-            from src.loaders import assign_sessions
-            warmup_df = assign_sessions(warmup_df, config['sessions'])
-        except Exception:
-            pass
+        config = {**config, "vwap_anchor_utc": session_info["start_utc"]}
+        current_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
+        warmup_df = initial_df.loc[initial_df["datetime"] < current_minute]
+        warmup_df = warmup_df.drop_duplicates(subset="datetime")
+        print(f"✅ Startup session: {session_info['label']}")
+    elif initial_df is not None:
+        warmup_df = initial_df
+        print(f"✅ Using preloaded startup dataframe: {len(warmup_df):,} bars")
+    else:
+        warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
+        print(f"✅ Using normal MT5 live warmup: {len(warmup_df):,} bars")
 
-    if 'typical_price' not in warmup_df.columns and all(c in warmup_df.columns for c in ['high', 'low', 'close']):
-        warmup_df['typical_price'] = (
-            warmup_df['high'] + warmup_df['low'] + warmup_df['close']
-        ) / 3.0
+    if warmup_df is None or len(warmup_df) == 0:
+        raise RuntimeError("Warmup dataframe is empty. Cannot start live engine.")
+
+    if "datetime" in warmup_df.columns:
+        warmup_df = warmup_df.sort_values("datetime").reset_index(drop=True)
 
     state = EngineState()
     for _, row in warmup_df.iterrows():
-        state = update_engine_state(state, row.to_dict(), config,
-                                    prob_table, marginal_table)
-    print(f"✅ Live engine warmed up on {len(warmup_df)} bars")
+        state = update_engine_state(
+            state,
+            row.to_dict(),
+            config,
+            prob_table,
+            marginal_table,
+        )
 
+    print(f"✅ Live engine warmed up on {len(warmup_df):,} bars")
     last_bar_time = None
+    if startup_replay_active:
+        last_replayed_bar = warmup_df["datetime"].iloc[-1]
+        last_bar_time = int(last_replayed_bar.timestamp())
+        print(f"✅ Live loop will continue after: {last_replayed_bar}")
+
     signal_state = 'NO_SIGNAL'
     active_signal = None
     reconnect_wait = 1
