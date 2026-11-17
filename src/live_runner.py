@@ -161,19 +161,25 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
 
     mt5_files_dir = Path(mt5.terminal_info().data_path) / "MQL5" / "Files"
     mt5_files_dir.mkdir(parents=True, exist_ok=True)
-    output_path = mt5_files_dir / "live_state.json"
+    output_path = mt5_files_dir / config.get("live_state_filename", "live_state.json")
 
     # ── Warm up engine ──
-    if initial_df is not None:
-        warmup_df = initial_df.copy()
-        print(f"✅ Using preloaded startup dataframe: {len(warmup_df):,} bars")
+    startup_replay_active = (
+        session_info is not None
+        and session_info.get("mode") in {"manual", "preset"}
+    )
+    if startup_replay_active:
+        if initial_df is None or not session_info.get("startup_rebuild_used"):
+            raise RuntimeError("Could not rebuild the anchored session. Check MT5 history.")
 
-        if session_info is not None:
-            print(
-                "✅ Startup session: "
-                f"{session_info.get('label', 'unknown')} "
-                f"| mode={session_info.get('mode', 'unknown')}"
-            )
+        config = {**config, "vwap_anchor_utc": session_info["start_utc"]}
+        current_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
+        warmup_df = initial_df.loc[initial_df["datetime"] < current_minute]
+        warmup_df = warmup_df.drop_duplicates(subset="datetime")
+        print(f"✅ Startup session: {session_info['label']}")
+    elif initial_df is not None:
+        warmup_df = initial_df
+        print(f"✅ Using preloaded startup dataframe: {len(warmup_df):,} bars")
     else:
         warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
         print(f"✅ Using normal MT5 live warmup: {len(warmup_df):,} bars")
@@ -185,38 +191,18 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
         warmup_df = warmup_df.sort_values("datetime").reset_index(drop=True)
 
     state = EngineState()
-
     for _, row in warmup_df.iterrows():
         state = update_engine_state(
-            state,
-            row.to_dict(),
-            config,
-            prob_table,
-            marginal_table,
+            state, row.to_dict(), config, prob_table, marginal_table
         )
 
     print(f"✅ Live engine warmed up on {len(warmup_df):,} bars")
-    # If preset/manual startup replay was used, the warmup dataframe already
-    # contains candles up to the current/latest available bar.
-    #
-    # Set last_bar_time to the final replayed candle so the live loop continues
-    # AFTER the replay, instead of processing the same latest candle again.
-    #
-    # In normal "now" mode, keep last_bar_time=None to preserve existing behaviour.
-    startup_replay_active = (
-        initial_df is not None
-        and session_info is not None
-        and bool(session_info.get("startup_rebuild_used", False))
-    )
+    last_bar_time = None
+    if startup_replay_active:
+        last_replayed_bar = warmup_df["datetime"].iloc[-1]
+        last_bar_time = int(last_replayed_bar.timestamp())
+        print(f"✅ Live loop will continue after: {last_replayed_bar}")
 
-    if startup_replay_active and "datetime" in warmup_df.columns:
-        last_bar_time = pd.to_datetime(warmup_df["datetime"].max(), utc=True)
-        print(f"✅ Startup replay complete. Live loop will continue after: {last_bar_time}")
-    else:
-        last_bar_time = None
-
-    # last_bar_time is set after warmup.
-    # In normal "now" mode it remains None, preserving old behaviour.
     signal_state = 'NO_SIGNAL'   # state machine
     active_signal = None         # the SignalResult currently active
     reconnect_wait = 1
@@ -353,6 +339,11 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 'band_3p':       round(state.bands.get('3+', 0), 5),
                 'band_3n':       round(state.bands.get('3-', 0), 5),
             }
+            ghost_bands = getattr(state, "ghost_bands", {}) or {}
+            for band in (1, 2, 3):
+                live_state_dict[f'ghost_{band}p'] = round(ghost_bands.get(f'{band}+', 0.0), 5)
+                live_state_dict[f'ghost_{band}n'] = round(ghost_bands.get(f'{band}-', 0.0), 5)
+
             if session_info is not None:
                 start_uk = session_info.get("start_uk")
                 start_broker = session_info.get("start_broker")
