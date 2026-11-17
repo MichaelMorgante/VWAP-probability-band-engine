@@ -5,7 +5,8 @@ import shutil
 
 
 def write_mql5_overlay(output_dir: str = "live_artifacts",
-                       filename: str = "VWAP_Overlay.mq5") -> None:
+                       filename: str = "VWAP_Overlay.mq5",
+                       json_path: str = "live_state.json") -> None:
     """
     Generate the MQL5 overlay source file and attempt to copy it
     into the local MT5 Indicators directory.
@@ -23,6 +24,7 @@ input string JsonPath = "live_state.json";
 
 // Display toggles
 input bool ShowBands   = true;
+input bool ShowGhostBands = true;
 input bool AnchorBandsToStartup = true;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
@@ -282,6 +284,7 @@ void ReadJsonState()
      g_startup_line_start_uk = new_startup_line_start_uk;
      g_startup_line_start_server = new_startup_line_start_server;
      g_startup_anchor_active = new_startup_anchor_active;
+     DrawGhostBands(content);
   }
 
 //+------------------------------------------------------------------+
@@ -384,6 +387,48 @@ void DrawBandLine(string name, double price, color clr, int width, int style)
     ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
     ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 }
+
+color FadeGhostColor(const color line_color, const color background_color)
+{
+    uint line_rgb = (uint)line_color;
+    uint background_rgb = (uint)background_color;
+
+    uint red = ((line_rgb & 0xFF) + (background_rgb & 0xFF)) / 2;
+    uint green = (((line_rgb >> 8) & 0xFF) + ((background_rgb >> 8) & 0xFF)) / 2;
+    uint blue = (((line_rgb >> 16) & 0xFF) + ((background_rgb >> 16) & 0xFF)) / 2;
+
+    return (color)(red | (green << 8) | (blue << 16));
+}
+
+void DrawGhostBands(const string content)
+{
+    double green_up = ExtractDouble(content, "ghost_1p");
+    double green_down = ExtractDouble(content, "ghost_1n");
+    double orange_up = ExtractDouble(content, "ghost_2p");
+    double orange_down = ExtractDouble(content, "ghost_2n");
+    double red_up = ExtractDouble(content, "ghost_3p");
+    double red_down = ExtractDouble(content, "ghost_3n");
+
+    if(!ShowGhostBands || green_up <= 0 || green_down <= 0 ||
+       orange_up <= 0 || orange_down <= 0 || red_up <= 0 || red_down <= 0)
+    {
+        ObjectsDeleteAll(0, "VWAP_GHOST_");
+        return;
+    }
+
+    color background = (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND, 0);
+    color green = FadeGhostColor(ColorBand1, background);
+    color orange = FadeGhostColor(ColorBand2, background);
+    color red = FadeGhostColor(ColorBand3, background);
+
+    DrawBandLine("VWAP_GHOST_1P", green_up, green, 1, STYLE_DOT);
+    DrawBandLine("VWAP_GHOST_1N", green_down, green, 1, STYLE_DOT);
+    DrawBandLine("VWAP_GHOST_2P", orange_up, orange, 1, STYLE_DASH);
+    DrawBandLine("VWAP_GHOST_2N", orange_down, orange, 1, STYLE_DASH);
+    DrawBandLine("VWAP_GHOST_3P", red_up, red, 1, STYLE_DASHDOT);
+    DrawBandLine("VWAP_GHOST_3N", red_down, red, 1, STYLE_DASHDOT);
+}
+
 
 //+------------------------------------------------------------------+
 void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
@@ -866,6 +911,11 @@ void DrawOverlay()
 //+------------------------------------------------------------------+
 '''
 
+    mql5_code = mql5_code.replace(
+        'input string JsonPath = "live_state.json";',
+        f'input string JsonPath = "{json_path}";',
+        1,
+    )
     local_path = Path(output_dir) / filename
     local_path.parent.mkdir(parents=True, exist_ok=True)
     local_path.write_text(mql5_code.strip(), encoding="utf-8", newline="\n")
