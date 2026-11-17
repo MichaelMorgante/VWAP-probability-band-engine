@@ -116,6 +116,16 @@ def write_live_context(
 
     print(f"✅ Context written: {output_path} ({len(points)} points)")
 
+def format_ghost_percentile(probability: float) -> str:
+    percentile = round(probability * 100.0, 6)
+    whole = int(percentile)
+    suffix = "th"
+    if percentile == whole and whole % 100 not in (11, 12, 13):
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(whole % 10, "th")
+    return f"{percentile:g}{suffix}"
+
+
+
 def run_live(symbol: str, timeframe_mt5, config: dict,
              prob_table: pd.DataFrame,
              marginal_table: pd.DataFrame = None,
@@ -343,6 +353,11 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
             for band in (1, 2, 3):
                 live_state_dict[f'ghost_{band}p'] = round(ghost_bands.get(f'{band}+', 0.0), 5)
                 live_state_dict[f'ghost_{band}n'] = round(ghost_bands.get(f'{band}-', 0.0), 5)
+
+            for band, percentile in enumerate(config.get("ghost_upper_percentiles", ()), start=1):
+                live_state_dict[f'ghost_label_{band}p'] = format_ghost_percentile(percentile)
+                live_state_dict[f'ghost_label_{band}n'] = format_ghost_percentile(1.0 - percentile)
+
 
             if session_info is not None:
                 start_uk = session_info.get("start_uk")

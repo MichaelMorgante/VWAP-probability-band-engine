@@ -400,6 +400,28 @@ color FadeGhostColor(const color line_color, const color background_color)
     return (color)(red | (green << 8) | (blue << 16));
 }
 
+void DrawGhostLabel(const string name, const datetime label_time, const double price,
+                    const color clr, const string percentile)
+{
+    if(label_time <= 0 || percentile == "")
+    {
+        ObjectDelete(0, name);
+        return;
+    }
+
+    if(ObjectFind(0, name) < 0)
+        ObjectCreate(0, name, OBJ_TEXT, 0, label_time, price);
+
+    ObjectMove(0, name, 0, label_time, price);
+    ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 8);
+    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+    ObjectSetString(0, name, OBJPROP_TEXT, "N · " + percentile);
+}
+
+
 void DrawGhostBands(const string content)
 {
     double green_up = ExtractDouble(content, "ghost_1p");
@@ -427,6 +449,19 @@ void DrawGhostBands(const string content)
     DrawBandLine("VWAP_GHOST_2N", orange_down, orange, 1, STYLE_DASH);
     DrawBandLine("VWAP_GHOST_3P", red_up, red, 1, STYLE_DASHDOT);
     DrawBandLine("VWAP_GHOST_3N", red_down, red, 1, STYLE_DASHDOT);
+    datetime label_time = iTime(_Symbol, _Period, 0);
+    DrawGhostLabel("VWAP_GHOST_LABEL_1P", label_time, green_up, green,
+                   ExtractString(content, "ghost_label_1p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_1N", label_time, green_down, green,
+                   ExtractString(content, "ghost_label_1n"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_2P", label_time, orange_up, orange,
+                   ExtractString(content, "ghost_label_2p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_2N", label_time, orange_down, orange,
+                   ExtractString(content, "ghost_label_2n"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_3P", label_time, red_up, red,
+                   ExtractString(content, "ghost_label_3p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_3N", label_time, red_down, red,
+                   ExtractString(content, "ghost_label_3n"));
 }
 
 
