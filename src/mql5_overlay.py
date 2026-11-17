@@ -393,9 +393,18 @@ color FadeGhostColor(const color line_color, const color background_color)
     uint line_rgb = (uint)line_color;
     uint background_rgb = (uint)background_color;
 
-    uint red = ((line_rgb & 0xFF) + (background_rgb & 0xFF)) / 2;
-    uint green = (((line_rgb >> 8) & 0xFF) + ((background_rgb >> 8) & 0xFF)) / 2;
-    uint blue = (((line_rgb >> 16) & 0xFF) + ((background_rgb >> 16) & 0xFF)) / 2;
+    const double visibility = 0.60;
+    const double tint = 0.25;
+    const double background_weight = 1.0 - visibility;
+    const double tint_weight = visibility * tint;
+    const double white = 255.0 * visibility * (1.0 - tint);
+
+    uint red = (uint)MathRound(white + tint_weight * (line_rgb & 0xFF)
+                                    + background_weight * (background_rgb & 0xFF));
+    uint green = (uint)MathRound(white + tint_weight * ((line_rgb >> 8) & 0xFF)
+                                      + background_weight * ((background_rgb >> 8) & 0xFF));
+    uint blue = (uint)MathRound(white + tint_weight * ((line_rgb >> 16) & 0xFF)
+                                     + background_weight * ((background_rgb >> 16) & 0xFF));
 
     return (color)(red | (green << 8) | (blue << 16));
 }
