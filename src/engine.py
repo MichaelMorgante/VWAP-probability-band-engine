@@ -48,6 +48,20 @@ class EngineState:
     ghost_bands: dict[str, float] = field(default_factory=dict)
     _ghost_gaps: list[float] = field(default_factory=list)
 
+    ghost_distribution: NormalDist | None = None
+
+    def ghost_stats_at_price(self, price: float) -> dict[str, float] | None:
+        distribution = self.ghost_distribution
+        if distribution is None:
+            return None
+
+        cdf = distribution.cdf(price)
+        return {
+            "pdf": distribution.pdf(price),
+            "cdf": cdf,
+            "upper_tail": 1.0 - cdf,
+        }
+
 
 def update_engine_state(state: EngineState, bar: dict,
                         config: dict,
@@ -118,6 +132,7 @@ def update_engine_state(state: EngineState, bar: dict,
 
     # ── Gaussian ghost bands ──
     state.ghost_bands = {}
+    state.ghost_distribution = None
     ghost_lookback = config.get('ghost_lookback_bars', 0)
     if ref_type == 'VWAP' and ghost_lookback > 0 and state._ref_history:
         # Measure the close against the VWAP that was visible during this bar.
@@ -125,17 +140,18 @@ def update_engine_state(state: EngineState, bar: dict,
         state._ghost_gaps = (state._ghost_gaps + [gap])[-ghost_lookback:]
 
         if len(state._ghost_gaps) == ghost_lookback:
-            ghost_sigma = float(np.sqrt(np.mean(np.square(state._ghost_gaps))))
+            ghost_variance = float(np.mean(np.square(state._ghost_gaps)))
+            ghost_sigma = float(np.sqrt(ghost_variance))
             green, orange, red = config['ghost_upper_percentiles']
             if not 0.5 < green < orange < red < 1.0:
                 raise ValueError("Ghost percentiles must increase between 0.5 and 1.0.")
 
             if ghost_sigma > 0.0:
-                normal = NormalDist()
+                distribution = NormalDist(mu=reference, sigma=ghost_sigma)
+                state.ghost_distribution = distribution
                 for band, percentile in enumerate((green, orange, red), start=1):
-                    distance = ghost_sigma * normal.inv_cdf(percentile)
-                    state.ghost_bands[f'{band}+'] = reference + distance
-                    state.ghost_bands[f'{band}-'] = reference - distance
+                    state.ghost_bands[f'{band}+'] = distribution.inv_cdf(percentile)
+                    state.ghost_bands[f'{band}-'] = distribution.inv_cdf(1.0 - percentile)
 
     
     # ── Z-score and zone ──
