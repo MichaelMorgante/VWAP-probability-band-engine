@@ -63,9 +63,7 @@ def update_engine_state(state: EngineState, bar: dict,
     typ_price = (high + low + close) / 3.0
     session   = bar.get('session_id') or (ts.date() if hasattr(ts, 'date') else ts)
 
-    # ── Session reset ──
-# ── Session tracking only: do NOT hard-reset VWAP at session boundary ──
-# ── Session tracking only: do NOT hard-reset VWAP at session boundary ──
+    # Track the session without resetting the reference automatically.
     if state._session_date is None:
         state._session_date = session
         state.session_bar_count = 0
@@ -75,6 +73,21 @@ def update_engine_state(state: EngineState, bar: dict,
     # ── Reference line ──
     ref_type = config['reference_type']
     if ref_type == 'VWAP':
+        anchor_utc = config.get('vwap_anchor_utc')
+        if (
+            anchor_utc is not None
+            and ts >= anchor_utc
+            and (state.datetime is None or state.datetime < anchor_utc)
+        ):
+            # Start a fresh VWAP and reference history with the warmed variance.
+            state._cum_pv = 0.0
+            state._cum_v = 0.0
+            state._session_date = session
+            state.session_bar_count = 1
+            state._ref_history = []
+            state._z_history = []
+            state._ath_history = []
+
         state._cum_pv += typ_price * volume
         state._cum_v  += volume
         reference = state._cum_pv / state._cum_v
