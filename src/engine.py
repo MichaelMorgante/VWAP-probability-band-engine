@@ -7,6 +7,8 @@ from src.lookup import lookup_probabilities
 from src.zones import classify_zone
 from src.adaptive_trend_health import update_adaptive_trend_health
 
+from statistics import NormalDist
+
 
 @dataclass
 class EngineState:
@@ -41,6 +43,10 @@ class EngineState:
     _ref_history:      list   = field(default_factory=list)
     _ath_history:      list = field(default_factory=list)
     _vol_ema:          float  = 0.0
+
+
+    ghost_bands: dict[str, float] = field(default_factory=dict)
+    _ghost_gaps: list[float] = field(default_factory=list)
 
 
 def update_engine_state(state: EngineState, bar: dict,
@@ -87,6 +93,7 @@ def update_engine_state(state: EngineState, bar: dict,
             state._ref_history = []
             state._z_history = []
             state._ath_history = []
+            state._ghost_gaps = []
 
         state._cum_pv += typ_price * volume
         state._cum_v  += volume
@@ -109,6 +116,28 @@ def update_engine_state(state: EngineState, bar: dict,
         state._ewma_var = (1 - lam) * deviation**2 + lam * state._ewma_var
     sigma = max(np.sqrt(state._ewma_var), 1e-10)
 
+    # ── Gaussian ghost bands ──
+    state.ghost_bands = {}
+    ghost_lookback = config.get('ghost_lookback_bars', 0)
+    if ref_type == 'VWAP' and ghost_lookback > 0 and state._ref_history:
+        # Measure the close against the VWAP that was visible during this bar.
+        gap = close - state.reference
+        state._ghost_gaps = (state._ghost_gaps + [gap])[-ghost_lookback:]
+
+        if len(state._ghost_gaps) == ghost_lookback:
+            ghost_sigma = float(np.sqrt(np.mean(np.square(state._ghost_gaps))))
+            green, orange, red = config['ghost_upper_percentiles']
+            if not 0.5 < green < orange < red < 1.0:
+                raise ValueError("Ghost percentiles must increase between 0.5 and 1.0.")
+
+            if ghost_sigma > 0.0:
+                normal = NormalDist()
+                for band, percentile in enumerate((green, orange, red), start=1):
+                    distance = ghost_sigma * normal.inv_cdf(percentile)
+                    state.ghost_bands[f'{band}+'] = reference + distance
+                    state.ghost_bands[f'{band}-'] = reference - distance
+
+    
     # ── Z-score and zone ──
     z_score = (close - reference) / sigma
     zone    = classify_zone(z_score, config['zone_thresholds'])
