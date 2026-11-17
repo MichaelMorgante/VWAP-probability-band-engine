@@ -17,46 +17,17 @@ def prepare_live_startup(
     anchor_offset_minutes: int = -30,
     manual_start_uk: str = "16:00",
     broker_timezone_name: str | None = None,
-    replay_warmup_bars: int = 200,
+    replay_warmup_bars: int = 90,
     overlay_visual_start: str = "session",
 ) -> tuple[pd.DataFrame | None, dict]:
-    """
-    Prepare optional startup data for the live engine.
+    """Load M1 candles to warm up and rebuild the selected session.
 
-    Modes
-    -----
-    now:
-        Current/old behaviour. Do not preload session data.
-        The live runner will use its normal recent MT5 warmup.
+    All three modes load replay_warmup_bars minutes before their anchor.
+    The live runner uses those candles to warm up the width, then starts
+    the trading VWAP at the anchor.
 
-    preset:
-        Load candles from a named session anchor, e.g.
-        London open, New York open, or Asia/Tokyo open.
-
-    manual:
-        Load candles from a manually selected UK time, e.g. 16:00.
-
-    replay_warmup_bars:
-        Used only for preset/manual mode.
-
-        Because this project runs on M1, 200 bars = 200 minutes.
-        The loader pulls this much data before the selected anchor so the
-        engine recreates the state as if it had really been launched then.
-
-        Example:
-        selected anchor = 14:00
-        replay_warmup_bars = 200
-        data load starts = 10:40
-        overlay anchor remains = 14:00
-
-    Returns
-    -------
-    initial_df:
-        DataFrame if session rebuild succeeded.
-        None if mode='now' or if rebuild fails and fallback should be used.
-
-    session_info:
-        Dictionary containing resolved UTC/UK/broker display times.
+    Return the candles and resolved session times. A failed history load
+    returns None for the candles.
     """
     session_start_mode = session_start_mode.lower().strip()
 
@@ -70,24 +41,6 @@ def prepare_live_startup(
 
     print("\n" + format_session_summary(session_info))
 
-    if session_start_mode == "now":
-        session_info["startup_rebuild_used"] = False
-        session_info["replay_warmup_bars"] = 0
-        session_info["data_start_utc"] = None
-        session_info["data_start_uk"] = None
-        session_info["overlay_visual_start"] = "none"
-        session_info["overlay_line_start_utc"] = None
-        session_info["overlay_line_start_uk"] = None
-        session_info["overlay_line_start_broker"] = None
-
-        print("\n✅ SESSION_START_MODE='now' selected.")
-        print("✅ Using normal recent MT5 warmup, same as before.")
-        return None, session_info
-
-    if session_start_mode not in {"preset", "manual"}:
-        raise ValueError(
-            "session_start_mode must be one of: 'now', 'preset', or 'manual'."
-        )
 
     try:
         replay_warmup_bars = max(int(replay_warmup_bars), 0)
@@ -160,6 +113,6 @@ def prepare_live_startup(
     except Exception as exc:
         session_info["startup_rebuild_used"] = False
 
-        print("\n⚠️ Session rebuild failed. Falling back to normal live startup.")
+        print("\n⚠️ Could not load history for the selected VWAP anchor.")
         print(f"Reason: {exc}")
         return None, session_info

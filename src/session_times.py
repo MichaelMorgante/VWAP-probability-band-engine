@@ -219,11 +219,9 @@ def get_now_session_start(
     now_utc: datetime | None = None,
     broker_timezone_name: str | None = None,
 ) -> dict:
-    """
-    Resolve start-now mode.
+    
+    """Anchor VWAP to the open time of the launch minute."""
 
-    This means no session rebuild.
-    """
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
 
@@ -235,7 +233,7 @@ def get_now_session_start(
         "label": "Start now",
         "offset_minutes": None,
         "session_open_utc": None,
-        "start_utc": now_utc,
+        "start_utc": now_utc.replace(second=0, microsecond=0),
         "end_utc": now_utc,
     }
 
