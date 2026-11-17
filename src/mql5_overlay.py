@@ -25,7 +25,7 @@ input string JsonPath = "live_state.json";
 // Display toggles
 input bool ShowBands   = true;
 input bool ShowGhostBands = true;
-input bool AnchorBandsToStartup = true;
+input bool AnchorBandsToStartup = false;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
 input bool ShowBandTable = true;
