@@ -391,45 +391,48 @@ void DrawBandLine(string name, double price, color clr, int width, int style)
 color FadeGhostColor(const color line_color, const color background_color)
 {
     uint line_rgb = (uint)line_color;
-    uint background_rgb = (uint)background_color;
+    uint bg_rgb = (uint)background_color;
+    const double line_weight = 0.68;
+    const double bg_weight = 1.0 - line_weight;
 
-    const double visibility = 0.60;
-    const double tint = 0.25;
-    const double background_weight = 1.0 - visibility;
-    const double tint_weight = visibility * tint;
-    const double white = 255.0 * visibility * (1.0 - tint);
-
-    uint red = (uint)MathRound(white + tint_weight * (line_rgb & 0xFF)
-                                    + background_weight * (background_rgb & 0xFF));
-    uint green = (uint)MathRound(white + tint_weight * ((line_rgb >> 8) & 0xFF)
-                                      + background_weight * ((background_rgb >> 8) & 0xFF));
-    uint blue = (uint)MathRound(white + tint_weight * ((line_rgb >> 16) & 0xFF)
-                                     + background_weight * ((background_rgb >> 16) & 0xFF));
+    uint red = (uint)MathRound(line_weight * (line_rgb & 0xFF)
+                              + bg_weight * (bg_rgb & 0xFF));
+    uint green = (uint)MathRound(line_weight * ((line_rgb >> 8) & 0xFF)
+                                + bg_weight * ((bg_rgb >> 8) & 0xFF));
+    uint blue = (uint)MathRound(line_weight * ((line_rgb >> 16) & 0xFF)
+                               + bg_weight * ((bg_rgb >> 16) & 0xFF));
 
     return (color)(red | (green << 8) | (blue << 16));
 }
 
-void DrawGhostLabel(const string name, const datetime label_time, const double price,
-                    const color clr, const string percentile)
+void DrawGhostLabel(const string name, const datetime visible_time,
+                    const int label_x, const int chart_height,
+                    const double price, const color clr,
+                    const string percentile)
 {
-    if(label_time <= 0 || percentile == "")
+    int time_x, price_y;
+    if(percentile == "" || label_x <= 0 || visible_time <= 0 ||
+       !ChartTimePriceToXY(0, 0, visible_time, price, time_x, price_y) ||
+       price_y < 12 || price_y >= chart_height)
     {
         ObjectDelete(0, name);
         return;
     }
 
     if(ObjectFind(0, name) < 0)
-        ObjectCreate(0, name, OBJ_TEXT, 0, label_time, price);
+        ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
 
-    ObjectMove(0, name, 0, label_time, price);
+    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
     ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
+    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, label_x);
+    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, price_y - 2);
     ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 8);
+    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
     ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
     ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+    ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
     ObjectSetString(0, name, OBJPROP_TEXT, "N · " + percentile);
 }
-
 
 void DrawGhostBands(const string content)
 {
@@ -448,9 +451,9 @@ void DrawGhostBands(const string content)
     }
 
     color background = (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND, 0);
-    color green = FadeGhostColor(ColorBand1, background);
-    color orange = FadeGhostColor(ColorBand2, background);
-    color red = FadeGhostColor(ColorBand3, background);
+    color green = FadeGhostColor(ColorGhostGreen, background);
+    color orange = FadeGhostColor(ColorGhostOrange, background);
+    color red = FadeGhostColor(ColorGhostRed, background);
 
     DrawBandLine("VWAP_GHOST_1P", green_up, green, 1, STYLE_DOT);
     DrawBandLine("VWAP_GHOST_1N", green_down, green, 1, STYLE_DOT);
@@ -458,19 +461,30 @@ void DrawGhostBands(const string content)
     DrawBandLine("VWAP_GHOST_2N", orange_down, orange, 1, STYLE_DASH);
     DrawBandLine("VWAP_GHOST_3P", red_up, red, 1, STYLE_DASHDOT);
     DrawBandLine("VWAP_GHOST_3N", red_down, red, 1, STYLE_DASHDOT);
-    datetime label_time = iTime(_Symbol, _Period, 0);
-    DrawGhostLabel("VWAP_GHOST_LABEL_1P", label_time, green_up, green,
-                   ExtractString(content, "ghost_label_1p"));
-    DrawGhostLabel("VWAP_GHOST_LABEL_1N", label_time, green_down, green,
-                   ExtractString(content, "ghost_label_1n"));
-    DrawGhostLabel("VWAP_GHOST_LABEL_2P", label_time, orange_up, orange,
-                   ExtractString(content, "ghost_label_2p"));
-    DrawGhostLabel("VWAP_GHOST_LABEL_2N", label_time, orange_down, orange,
-                   ExtractString(content, "ghost_label_2n"));
-    DrawGhostLabel("VWAP_GHOST_LABEL_3P", label_time, red_up, red,
-                   ExtractString(content, "ghost_label_3p"));
-    DrawGhostLabel("VWAP_GHOST_LABEL_3N", label_time, red_down, red,
-                   ExtractString(content, "ghost_label_3n"));
+
+    int chart_width = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
+    int chart_height = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+    int right_padding = 18;
+    if(ShowBandTable && (TableCorner == CORNER_RIGHT_UPPER ||
+                        TableCorner == CORNER_RIGHT_LOWER))
+        right_padding += TableXOffset;
+
+    int label_x = chart_width - right_padding;
+    int first_visible = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR, 0);
+    datetime visible_time = iTime(_Symbol, _Period, first_visible);
+
+    DrawGhostLabel("VWAP_GHOST_LABEL_1P", visible_time, label_x, chart_height,
+                   green_up, ColorGhostGreen, ExtractString(content, "ghost_label_1p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_1N", visible_time, label_x, chart_height,
+                   green_down, ColorGhostGreen, ExtractString(content, "ghost_label_1n"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_2P", visible_time, label_x, chart_height,
+                   orange_up, ColorGhostOrange, ExtractString(content, "ghost_label_2p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_2N", visible_time, label_x, chart_height,
+                   orange_down, ColorGhostOrange, ExtractString(content, "ghost_label_2n"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_3P", visible_time, label_x, chart_height,
+                   red_up, ColorGhostRed, ExtractString(content, "ghost_label_3p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_3N", visible_time, label_x, chart_height,
+                   red_down, ColorGhostRed, ExtractString(content, "ghost_label_3n"));
 }
 
 
@@ -1023,6 +1037,9 @@ input color ColorVWAP  = clrDodgerBlue;
 input color ColorBand1 = clrLimeGreen;
 input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
+input color ColorGhostGreen  = C'176,239,207';
+input color ColorGhostOrange = C'255,203,149';
+input color ColorGhostRed    = C'255,163,183';
 
 // Context line colours
 input color ColorCtxRef = clrRoyalBlue;
