@@ -43,6 +43,9 @@ input color ColorVWAP  = clrDodgerBlue;
 input color ColorBand1 = clrLimeGreen;
 input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
+input color ColorGhostGreen  = C'176,239,207';
+input color ColorGhostOrange = C'255,203,149';
+input color ColorGhostRed    = C'255,163,183';
 input color ColorSignalMR   = clrLimeGreen;
 input color ColorSignalCont = clrOrangeRed;
 input color ColorMoveUp   = clrLimeGreen;
@@ -1037,9 +1040,6 @@ input color ColorVWAP  = clrDodgerBlue;
 input color ColorBand1 = clrLimeGreen;
 input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
-input color ColorGhostGreen  = C'176,239,207';
-input color ColorGhostOrange = C'255,203,149';
-input color ColorGhostRed    = C'255,163,183';
 
 // Context line colours
 input color ColorCtxRef = clrRoyalBlue;
