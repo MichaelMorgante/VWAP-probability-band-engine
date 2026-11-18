@@ -43,9 +43,9 @@ input color ColorVWAP  = clrDodgerBlue;
 input color ColorBand1 = clrLimeGreen;
 input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
-input color ColorGhostGreen  = C'176,239,207';
-input color ColorGhostOrange = C'255,203,149';
-input color ColorGhostRed    = C'255,163,183';
+input color ColorGhostGreen  = C'157,236,213';
+input color ColorGhostOrange = C'255,208,163';
+input color ColorGhostRed    = C'255,159,176';
 input color ColorSignalMR   = clrLimeGreen;
 input color ColorSignalCont = clrOrangeRed;
 input color ColorMoveUp   = clrLimeGreen;
@@ -395,7 +395,7 @@ color FadeGhostColor(const color line_color, const color background_color)
 {
     uint line_rgb = (uint)line_color;
     uint bg_rgb = (uint)background_color;
-    const double line_weight = 0.68;
+    const double line_weight = 0.82;
     const double bg_weight = 1.0 - line_weight;
 
     uint red = (uint)MathRound(line_weight * (line_rgb & 0xFF)
