@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.loaders import load_mt5_range
+from src.loaders import load_mt5_live, load_mt5_range
 from src.session_times import format_session_summary, resolve_session_start
 
 
@@ -19,6 +19,7 @@ def prepare_live_startup(
     broker_timezone_name: str | None = None,
     replay_warmup_bars: int = 90,
     overlay_visual_start: str = "session",
+    recent_anchor_bars: int | None = None,
 ) -> tuple[pd.DataFrame | None, dict]:
     """Load M1 candles to warm up and rebuild the selected session.
 
@@ -30,20 +31,51 @@ def prepare_live_startup(
     returns None for the candles.
     """
     session_start_mode = session_start_mode.lower().strip()
+    use_recent_anchor = session_start_mode == "recent"
 
     session_info = resolve_session_start(
-        mode=session_start_mode,
+        mode="now" if use_recent_anchor else session_start_mode,
         preset=session_preset,
         manual_start_uk=manual_start_uk,
         offset_minutes=anchor_offset_minutes,
         broker_timezone_name=broker_timezone_name,
     )
-
-    print("\n" + format_session_summary(session_info))
-
+    if use_recent_anchor:
+        session_info["mode"] = "recent"
 
     try:
         replay_warmup_bars = max(int(replay_warmup_bars), 0)
+        initial_df = None
+
+        if use_recent_anchor:
+            if type(recent_anchor_bars) is not int or recent_anchor_bars < 1:
+                raise ValueError("RECENT_ANCHOR_BARS must be a positive integer.")
+
+            anchor_bars = recent_anchor_bars
+            session_info["label"] = f"Recent {anchor_bars} completed M1 candles"
+            launch_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
+            cutoff = (launch_minute - pd.Timedelta(minutes=1)).to_pydatetime()
+
+            initial_df = load_mt5_live(
+                symbol,
+                timeframe_mt5,
+                n_bars=anchor_bars + replay_warmup_bars,
+                end_time_utc=cutoff,
+            )
+            initial_df = initial_df.loc[initial_df["datetime"] < launch_minute]
+            initial_df = initial_df.drop_duplicates(subset="datetime")
+            if len(initial_df) < anchor_bars:
+                raise RuntimeError(f"Recent mode needs {anchor_bars} completed M1 candles.")
+
+            anchor = initial_df["datetime"].iloc[-anchor_bars].to_pydatetime()
+            session_info["start_utc"] = anchor
+            session_info["start_uk"] = anchor.astimezone(session_info["start_uk"].tzinfo)
+            start_broker = session_info["start_broker"]
+            if start_broker is not None:
+                session_info["start_broker"] = anchor.astimezone(start_broker.tzinfo)
+
+        print("\n" + format_session_summary(session_info))
+
 
         # M1 assumption:
         # 1 bar = 1 minute, so 200 bars = 200 minutes.
@@ -93,12 +125,16 @@ def prepare_live_startup(
         )
         print(f"✅ Replay warmup bars:       {replay_warmup_bars}")
 
-        initial_df = load_mt5_range(
-            symbol=symbol,
-            timeframe_mt5=timeframe_mt5,
-            start_time_utc=data_start_utc,
-            end_time_utc=session_info["end_utc"],
-        )
+        if initial_df is None:
+            initial_df = load_mt5_range(
+                symbol=symbol,
+                timeframe_mt5=timeframe_mt5,
+                start_time_utc=data_start_utc,
+                end_time_utc=session_info["end_utc"],
+            )
+        else:
+            initial_df = initial_df.loc[initial_df["datetime"] >= data_start_utc]
+            initial_df = initial_df.reset_index(drop=True)
 
         session_info["startup_rebuild_used"] = True
 

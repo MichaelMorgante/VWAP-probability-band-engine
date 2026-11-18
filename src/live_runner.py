@@ -176,7 +176,7 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
     # ── Warm up engine ──
     startup_replay_active = (
         session_info is not None
-        and session_info.get("mode") in {"now", "manual", "preset"}
+        and session_info.get("mode") in {"recent", "now", "manual", "preset"}
     )
     if startup_replay_active:
         if initial_df is None or not session_info.get("startup_rebuild_used"):
