@@ -349,6 +349,18 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 'band_3p':       round(state.bands.get('3+', 0), 5),
                 'band_3n':       round(state.bands.get('3-', 0), 5),
             }
+            
+            ghost_distribution = state.ghost_distribution
+            ghost_stats = state.ghost_stats_at_price(state.close)
+            if ghost_distribution is not None and ghost_stats is not None:
+                ghost_sigma = ghost_distribution.stdev
+                ghost_z = (state.close - ghost_distribution.mean) / ghost_sigma
+                ghost_tail = min(ghost_stats["cdf"], ghost_stats["upper_tail"])
+                live_state_dict.update(
+                    ghost_sigma=round(ghost_sigma, 5),
+                    ghost_z=round(ghost_z, 6),
+                    ghost_tail_pct=round(100.0 * ghost_tail, 4),
+                )
             ghost_bands = getattr(state, "ghost_bands", {}) or {}
             for band in (1, 2, 3):
                 live_state_dict[f'ghost_{band}p'] = round(ghost_bands.get(f'{band}+', 0.0), 5)

@@ -25,6 +25,7 @@ input string JsonPath = "live_state.json";
 // Display toggles
 input bool ShowBands   = true;
 input bool ShowGhostBands = true;
+input bool ShowGhostStatsTable = true;
 input bool AnchorBandsToStartup = false;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
@@ -488,16 +489,20 @@ void DrawGhostBands(const string content)
                    red_up, ColorGhostRed, ExtractString(content, "ghost_label_3p"));
     DrawGhostLabel("VWAP_GHOST_LABEL_3N", visible_time, label_x, chart_height,
                    red_down, ColorGhostRed, ExtractString(content, "ghost_label_3n"));
+    DrawGhostStatsTable(content);
 }
 
 
 //+------------------------------------------------------------------+
-void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
+void DrawLabel(string name, string text, int x, int y, color clr, int font_size,
+               bool bottom_right = false)
   {
    if(ObjectFind(0, name) < 0)
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
 
-   ObjectSetInteger(0, name, OBJPROP_CORNER, TableCorner);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, bottom_right ? CORNER_RIGHT_LOWER : TableCorner);
+   if(bottom_right)
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
@@ -506,6 +511,35 @@ void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+  }
+
+void DrawGhostStatsTable(const string content)
+  {
+   const string prefix = "VWAP_GHOST_TABLE_";
+   double sigma = ExtractDouble(content, "ghost_sigma");
+   if(!ShowGhostStatsTable || sigma <= 0.0)
+     {
+      if(ObjectFind(0, prefix + "TITLE") >= 0)
+         ObjectsDeleteAll(0, prefix);
+      return;
+     }
+
+   double z = ExtractDouble(content, "ghost_z");
+   double tail_pct = ExtractDouble(content, "ghost_tail_pct");
+   string tail = tail_pct < 0.1 ? "<0.1%" : StringFormat("%.1f%%", tail_pct);
+
+   const int x = 18;
+   const int y = 18;
+   const int row_gap = 17;
+
+   DrawLabel(prefix + "TITLE", "Gaussian bands", x, y + 3 * row_gap,
+             ColorGhostGreen, TableFontSize + 1, true);
+   DrawLabel(prefix + "SIGMA", StringFormat("Ghost sigma %7.2f pts", sigma),
+             x, y + 2 * row_gap, TableTextColor, TableFontSize, true);
+   DrawLabel(prefix + "Z", StringFormat("Close vs VWAP %+.2f sigma", z),
+             x, y + row_gap, TableTextColor, TableFontSize, true);
+   DrawLabel(prefix + "TAIL", "Model tail " + tail,
+             x, y, TableTextColor, TableFontSize, true);
   }
   
 
