@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.context_overlay import compute_context_vwap
+from src.loaders import load_mt5_range
 
 
 def compute_reference_shift(state, lookback: int = 5) -> float:
@@ -222,34 +223,72 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
         while True:
             try:
                 rates = mt5.copy_rates_from_pos(symbol, timeframe_mt5, 1, 1)
+                recovered_bars = None
+
+                if rates is not None and len(rates) > 0:
+                    bar_time = int(rates[0]["time"])
+                    if (
+                        startup_replay_active
+                        and timeframe_mt5 == mt5.TIMEFRAME_M1
+                        and last_bar_time is not None
+                        and bar_time > last_bar_time + 60
+                    ):
+                        previous_bar = pd.Timestamp(last_bar_time, unit="s", tz="UTC")
+                        latest_bar = pd.Timestamp(bar_time, unit="s", tz="UTC")
+                        history = load_mt5_range(
+                            symbol,
+                            timeframe_mt5,
+                            (previous_bar + pd.Timedelta(minutes=1)).to_pydatetime(),
+                            latest_bar.to_pydatetime(),
+                        )
+                        if not history["datetime"].eq(latest_bar).any():
+                            raise RuntimeError(
+                                "MT5 catch-up history has not reached the latest closed candle."
+                            )
+
+                        missed = (
+                            history["datetime"].gt(previous_bar)
+                            & history["datetime"].lt(latest_bar)
+                        )
+                        recovered_bars = (
+                            history.loc[missed]
+                            .drop_duplicates(subset="datetime")
+                            .sort_values("datetime")
+                        )
             except Exception as e:
                 print(f"⚠️  MT5 read error: {e} — retrying in {reconnect_wait}s")
                 time.sleep(reconnect_wait)
                 reconnect_wait = min(reconnect_wait * 2, 60)
                 continue
 
-            reconnect_wait = 1  # reset on success
+            reconnect_wait = 1
 
             if rates is None or len(rates) == 0:
                 time.sleep(1)
                 continue
 
-            bar_time = rates[0]['time']
             if last_bar_time is not None and bar_time <= last_bar_time:
                 time.sleep(1)
                 continue
 
-            last_bar_time = bar_time
-            bar = {
-                'datetime':    pd.Timestamp(bar_time, unit='s', tz='UTC'),
-                'open':        float(rates[0]['open']),
-                'high':        float(rates[0]['high']),
-                'low':         float(rates[0]['low']),
-                'close':       float(rates[0]['close']),
-                'tick_volume': float(rates[0]['tick_volume']),
-            }
+            if recovered_bars is not None and not recovered_bars.empty:
+                for recovered_bar in recovered_bars.to_dict("records"):
+                    state = update_engine_state(
+                        state, recovered_bar, config, prob_table, marginal_table
+                    )
+                print(f"✅ Replayed {len(recovered_bars)} missed closed M1 candles")
 
+            rate = rates[0]
+            bar = {
+                "datetime": pd.Timestamp(bar_time, unit="s", tz="UTC"),
+                "open": float(rate["open"]),
+                "high": float(rate["high"]),
+                "low": float(rate["low"]),
+                "close": float(rate["close"]),
+                "tick_volume": float(rate["tick_volume"]),
+            }
             state = update_engine_state(state, bar, config, prob_table, marginal_table)
+            last_bar_time = bar_time
             sig = generate_signal(state, config)
             sig = regime_gate(sig, config)
             sig = apply_filters(sig, state, config)
