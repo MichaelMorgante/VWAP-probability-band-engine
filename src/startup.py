@@ -67,7 +67,7 @@ def prepare_live_startup(
                 raise ValueError("RECENT_ANCHOR_BARS must be a positive integer.")
 
             anchor_bars = recent_anchor_bars
-            session_info["label"] = f"Recent {anchor_bars} completed M1 candles"
+            session_info["label"] = f"Now w/ warmup ({anchor_bars}-candle VWAP seed)"
             launch_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
             cutoff = (launch_minute - pd.Timedelta(minutes=1)).to_pydatetime()
 
