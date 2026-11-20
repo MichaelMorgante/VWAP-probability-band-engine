@@ -33,7 +33,7 @@ def prepare_live_startup(
     returns None for the candles.
     """
     session_start_mode = session_start_mode.lower().strip()
-    use_recent_anchor = session_start_mode == "recent"
+    use_recent_anchor = session_start_mode == "now_with_warmup"
 
     session_info = resolve_session_start(
         mode="now" if use_recent_anchor else session_start_mode,
