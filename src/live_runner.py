@@ -179,10 +179,12 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
         session_info is not None
         and session_info.get("mode") in {"recent", "now", "manual", "preset"}
     )
+    mt5_timestamp_offset_minutes = 0
     if startup_replay_active:
         if initial_df is None or not session_info.get("startup_rebuild_used"):
             raise RuntimeError("Could not rebuild the anchored session. Check MT5 history.")
 
+        mt5_timestamp_offset_minutes = session_info.get("mt5_timestamp_offset_minutes", 0)
         config = {**config, "vwap_anchor_utc": session_info["start_utc"]}
         current_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
         warmup_df = initial_df.loc[initial_df["datetime"] < current_minute]
@@ -226,7 +228,9 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 recovered_bars = None
 
                 if rates is not None and len(rates) > 0:
-                    bar_time = int(rates[0]["time"])
+                    bar_time = (
+                        int(rates[0]["time"]) - mt5_timestamp_offset_minutes * 60
+                    )
                     if (
                         startup_replay_active
                         and timeframe_mt5 == mt5.TIMEFRAME_M1
@@ -240,6 +244,7 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                             timeframe_mt5,
                             (previous_bar + pd.Timedelta(minutes=1)).to_pydatetime(),
                             latest_bar.to_pydatetime(),
+                            mt5_timestamp_offset_minutes=mt5_timestamp_offset_minutes,
                         )
                         if not history["datetime"].eq(latest_bar).any():
                             raise RuntimeError(
