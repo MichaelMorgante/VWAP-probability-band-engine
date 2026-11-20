@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Any
 
 import pandas as pd
 
 from src.loaders import load_mt5_live, load_mt5_range
 from src.session_times import format_session_summary, resolve_session_start
+
+from src.mt5_clock import detect_mt5_timestamp_offset_minutes
 
 
 def prepare_live_startup(
@@ -31,7 +33,7 @@ def prepare_live_startup(
     returns None for the candles.
     """
     session_start_mode = session_start_mode.lower().strip()
-    use_recent_anchor = session_start_mode == "recent"
+    use_recent_anchor = session_start_mode == "now_with_warmup"
 
     session_info = resolve_session_start(
         mode="now" if use_recent_anchor else session_start_mode,
@@ -44,6 +46,19 @@ def prepare_live_startup(
         session_info["mode"] = "recent"
 
     try:
+        mt5_timestamp_offset_minutes = detect_mt5_timestamp_offset_minutes(symbol)
+        session_info["mt5_timestamp_offset_minutes"] = mt5_timestamp_offset_minutes
+        print(f"✅ Detected MT5 timestamp offset: {mt5_timestamp_offset_minutes:+d} minutes")
+
+        if broker_timezone_name is not None and mt5_timestamp_offset_minutes != 0:
+            broker_clock = timezone(timedelta(minutes=mt5_timestamp_offset_minutes))
+            session_info["broker_timezone_name"] = str(broker_clock)
+            for field in ("start", "end", "session_open"):
+                utc_time = session_info.get(f"{field}_utc")
+                session_info[f"{field}_broker"] = (
+                    utc_time.astimezone(broker_clock) if utc_time is not None else None
+                )
+
         replay_warmup_bars = max(int(replay_warmup_bars), 0)
         initial_df = None
 
@@ -52,7 +67,7 @@ def prepare_live_startup(
                 raise ValueError("RECENT_ANCHOR_BARS must be a positive integer.")
 
             anchor_bars = recent_anchor_bars
-            session_info["label"] = f"Recent {anchor_bars} completed M1 candles"
+            session_info["label"] = f"Now w/ warmup ({anchor_bars}-candle VWAP seed)"
             launch_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
             cutoff = (launch_minute - pd.Timedelta(minutes=1)).to_pydatetime()
 
@@ -61,6 +76,7 @@ def prepare_live_startup(
                 timeframe_mt5,
                 n_bars=anchor_bars + replay_warmup_bars,
                 end_time_utc=cutoff,
+                mt5_timestamp_offset_minutes=mt5_timestamp_offset_minutes,
             )
             initial_df = initial_df.loc[initial_df["datetime"] < launch_minute]
             initial_df = initial_df.drop_duplicates(subset="datetime")
@@ -131,6 +147,7 @@ def prepare_live_startup(
                 timeframe_mt5=timeframe_mt5,
                 start_time_utc=data_start_utc,
                 end_time_utc=session_info["end_utc"],
+                mt5_timestamp_offset_minutes=mt5_timestamp_offset_minutes,
             )
         else:
             initial_df = initial_df.loc[initial_df["datetime"] >= data_start_utc]
