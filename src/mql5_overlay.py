@@ -5,7 +5,8 @@ import shutil
 
 
 def write_mql5_overlay(output_dir: str = "live_artifacts",
-                       filename: str = "VWAP_Overlay.mq5") -> None:
+                       filename: str = "VWAP_Overlay.mq5",
+                       json_path: str = "live_state.json") -> None:
     """
     Generate the MQL5 overlay source file and attempt to copy it
     into the local MT5 Indicators directory.
@@ -23,7 +24,9 @@ input string JsonPath = "live_state.json";
 
 // Display toggles
 input bool ShowBands   = true;
-input bool AnchorBandsToStartup = true;
+input bool ShowGhostBands = true;
+input bool ShowGhostStatsTable = true;
+input bool AnchorBandsToStartup = false;
 input bool ShowSignal  = true;
 input bool ShowZScore  = true;
 input bool ShowBandTable = true;
@@ -41,6 +44,9 @@ input color ColorVWAP  = clrDodgerBlue;
 input color ColorBand1 = clrLimeGreen;
 input color ColorBand2 = clrOrange;
 input color ColorBand3 = clrRed;
+input color ColorGhostGreen  = C'157,236,213';
+input color ColorGhostOrange = C'255,208,163';
+input color ColorGhostRed    = C'255,159,176';
 input color ColorSignalMR   = clrLimeGreen;
 input color ColorSignalCont = clrOrangeRed;
 input color ColorMoveUp   = clrLimeGreen;
@@ -282,6 +288,7 @@ void ReadJsonState()
      g_startup_line_start_uk = new_startup_line_start_uk;
      g_startup_line_start_server = new_startup_line_start_server;
      g_startup_anchor_active = new_startup_anchor_active;
+     DrawGhostBands(content);
   }
 
 //+------------------------------------------------------------------+
@@ -385,13 +392,117 @@ void DrawBandLine(string name, double price, color clr, int width, int style)
     ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 }
 
+color FadeGhostColor(const color line_color, const color background_color)
+{
+    uint line_rgb = (uint)line_color;
+    uint bg_rgb = (uint)background_color;
+    const double line_weight = 0.82;
+    const double bg_weight = 1.0 - line_weight;
+
+    uint red = (uint)MathRound(line_weight * (line_rgb & 0xFF)
+                              + bg_weight * (bg_rgb & 0xFF));
+    uint green = (uint)MathRound(line_weight * ((line_rgb >> 8) & 0xFF)
+                                + bg_weight * ((bg_rgb >> 8) & 0xFF));
+    uint blue = (uint)MathRound(line_weight * ((line_rgb >> 16) & 0xFF)
+                               + bg_weight * ((bg_rgb >> 16) & 0xFF));
+
+    return (color)(red | (green << 8) | (blue << 16));
+}
+
+void DrawGhostLabel(const string name, const datetime visible_time,
+                    const int label_x, const int chart_height,
+                    const double price, const color clr,
+                    const string percentile)
+{
+    int time_x, price_y;
+    if(percentile == "" || label_x <= 0 || visible_time <= 0 ||
+       !ChartTimePriceToXY(0, 0, visible_time, price, time_x, price_y) ||
+       price_y < 12 || price_y >= chart_height)
+    {
+        ObjectDelete(0, name);
+        return;
+    }
+
+    if(ObjectFind(0, name) < 0)
+        ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+
+    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+    ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
+    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, label_x);
+    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, price_y - 2);
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+    ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+    ObjectSetString(0, name, OBJPROP_TEXT, "N · " + percentile);
+}
+
+void DrawGhostBands(const string content)
+{
+    double green_up = ExtractDouble(content, "ghost_1p");
+    double green_down = ExtractDouble(content, "ghost_1n");
+    double orange_up = ExtractDouble(content, "ghost_2p");
+    double orange_down = ExtractDouble(content, "ghost_2n");
+    double red_up = ExtractDouble(content, "ghost_3p");
+    double red_down = ExtractDouble(content, "ghost_3n");
+
+    if(!ShowGhostBands || green_up <= 0 || green_down <= 0 ||
+       orange_up <= 0 || orange_down <= 0 || red_up <= 0 || red_down <= 0)
+    {
+        ObjectsDeleteAll(0, "VWAP_GHOST_");
+        return;
+    }
+
+    color background = (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND, 0);
+    color green = FadeGhostColor(ColorGhostGreen, background);
+    color orange = FadeGhostColor(ColorGhostOrange, background);
+    color red = FadeGhostColor(ColorGhostRed, background);
+
+    DrawBandLine("VWAP_GHOST_1P", green_up, green, 1, STYLE_DOT);
+    DrawBandLine("VWAP_GHOST_1N", green_down, green, 1, STYLE_DOT);
+    DrawBandLine("VWAP_GHOST_2P", orange_up, orange, 1, STYLE_DASH);
+    DrawBandLine("VWAP_GHOST_2N", orange_down, orange, 1, STYLE_DASH);
+    DrawBandLine("VWAP_GHOST_3P", red_up, red, 1, STYLE_DASHDOT);
+    DrawBandLine("VWAP_GHOST_3N", red_down, red, 1, STYLE_DASHDOT);
+
+    int chart_width = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
+    int chart_height = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+    int right_padding = 18;
+    if(ShowBandTable && (TableCorner == CORNER_RIGHT_UPPER ||
+                        TableCorner == CORNER_RIGHT_LOWER))
+        right_padding += TableXOffset;
+
+    int label_x = chart_width - right_padding;
+    int first_visible = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR, 0);
+    datetime visible_time = iTime(_Symbol, _Period, first_visible);
+
+    DrawGhostLabel("VWAP_GHOST_LABEL_1P", visible_time, label_x, chart_height,
+                   green_up, ColorGhostGreen, ExtractString(content, "ghost_label_1p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_1N", visible_time, label_x, chart_height,
+                   green_down, ColorGhostGreen, ExtractString(content, "ghost_label_1n"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_2P", visible_time, label_x, chart_height,
+                   orange_up, ColorGhostOrange, ExtractString(content, "ghost_label_2p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_2N", visible_time, label_x, chart_height,
+                   orange_down, ColorGhostOrange, ExtractString(content, "ghost_label_2n"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_3P", visible_time, label_x, chart_height,
+                   red_up, ColorGhostRed, ExtractString(content, "ghost_label_3p"));
+    DrawGhostLabel("VWAP_GHOST_LABEL_3N", visible_time, label_x, chart_height,
+                   red_down, ColorGhostRed, ExtractString(content, "ghost_label_3n"));
+    DrawGhostStatsTable(content);
+}
+
+
 //+------------------------------------------------------------------+
-void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
+void DrawLabel(string name, string text, int x, int y, color clr, int font_size,
+               bool bottom_right = false)
   {
    if(ObjectFind(0, name) < 0)
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
 
-   ObjectSetInteger(0, name, OBJPROP_CORNER, TableCorner);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, bottom_right ? CORNER_RIGHT_LOWER : TableCorner);
+   if(bottom_right)
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
@@ -400,6 +511,35 @@ void DrawLabel(string name, string text, int x, int y, color clr, int font_size)
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+  }
+
+void DrawGhostStatsTable(const string content)
+  {
+   const string prefix = "VWAP_GHOST_TABLE_";
+   double sigma = ExtractDouble(content, "ghost_sigma");
+   if(!ShowGhostStatsTable || sigma <= 0.0)
+     {
+      if(ObjectFind(0, prefix + "TITLE") >= 0)
+         ObjectsDeleteAll(0, prefix);
+      return;
+     }
+
+   double z = ExtractDouble(content, "ghost_z");
+   double tail_pct = ExtractDouble(content, "ghost_tail_pct");
+   string tail = tail_pct < 0.1 ? "<0.1%" : StringFormat("%.1f%%", tail_pct);
+
+   const int x = 18;
+   const int y = 18;
+   const int row_gap = 17;
+
+   DrawLabel(prefix + "TITLE", "Gaussian bands", x, y + 3 * row_gap,
+             ColorGhostGreen, TableFontSize + 1, true);
+   DrawLabel(prefix + "SIGMA", StringFormat("Ghost sigma %7.2f pts", sigma),
+             x, y + 2 * row_gap, TableTextColor, TableFontSize, true);
+   DrawLabel(prefix + "Z", StringFormat("Close vs VWAP %+.2f sigma", z),
+             x, y + row_gap, TableTextColor, TableFontSize, true);
+   DrawLabel(prefix + "TAIL", "Model tail " + tail,
+             x, y, TableTextColor, TableFontSize, true);
   }
   
 
@@ -866,6 +1006,11 @@ void DrawOverlay()
 //+------------------------------------------------------------------+
 '''
 
+    mql5_code = mql5_code.replace(
+        'input string JsonPath = "live_state.json";',
+        f'input string JsonPath = "{json_path}";',
+        1,
+    )
     local_path = Path(output_dir) / filename
     local_path.parent.mkdir(parents=True, exist_ok=True)
     local_path.write_text(mql5_code.strip(), encoding="utf-8", newline="\n")

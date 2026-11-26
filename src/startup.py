@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Any
 
 import pandas as pd
 
-from src.loaders import load_mt5_range
+from src.loaders import load_mt5_live, load_mt5_range
 from src.session_times import format_session_summary, resolve_session_start
+
+from src.mt5_clock import detect_mt5_timestamp_offset_minutes
 
 
 def prepare_live_startup(
@@ -17,80 +19,79 @@ def prepare_live_startup(
     anchor_offset_minutes: int = -30,
     manual_start_uk: str = "16:00",
     broker_timezone_name: str | None = None,
-    replay_warmup_bars: int = 200,
+    replay_warmup_bars: int = 90,
     overlay_visual_start: str = "session",
+    recent_anchor_bars: int | None = None,
 ) -> tuple[pd.DataFrame | None, dict]:
-    """
-    Prepare optional startup data for the live engine.
+    """Load M1 candles to warm up and rebuild the selected session.
 
-    Modes
-    -----
-    now:
-        Current/old behaviour. Do not preload session data.
-        The live runner will use its normal recent MT5 warmup.
+    All three modes load replay_warmup_bars minutes before their anchor.
+    The live runner uses those candles to warm up the width, then starts
+    the trading VWAP at the anchor.
 
-    preset:
-        Load candles from a named session anchor, e.g.
-        London open, New York open, or Asia/Tokyo open.
-
-    manual:
-        Load candles from a manually selected UK time, e.g. 16:00.
-
-    replay_warmup_bars:
-        Used only for preset/manual mode.
-
-        Because this project runs on M1, 200 bars = 200 minutes.
-        The loader pulls this much data before the selected anchor so the
-        engine recreates the state as if it had really been launched then.
-
-        Example:
-        selected anchor = 14:00
-        replay_warmup_bars = 200
-        data load starts = 10:40
-        overlay anchor remains = 14:00
-
-    Returns
-    -------
-    initial_df:
-        DataFrame if session rebuild succeeded.
-        None if mode='now' or if rebuild fails and fallback should be used.
-
-    session_info:
-        Dictionary containing resolved UTC/UK/broker display times.
+    Return the candles and resolved session times. A failed history load
+    returns None for the candles.
     """
     session_start_mode = session_start_mode.lower().strip()
+    use_recent_anchor = session_start_mode == "now_with_warmup"
 
     session_info = resolve_session_start(
-        mode=session_start_mode,
+        mode="now" if use_recent_anchor else session_start_mode,
         preset=session_preset,
         manual_start_uk=manual_start_uk,
         offset_minutes=anchor_offset_minutes,
         broker_timezone_name=broker_timezone_name,
     )
-
-    print("\n" + format_session_summary(session_info))
-
-    if session_start_mode == "now":
-        session_info["startup_rebuild_used"] = False
-        session_info["replay_warmup_bars"] = 0
-        session_info["data_start_utc"] = None
-        session_info["data_start_uk"] = None
-        session_info["overlay_visual_start"] = "none"
-        session_info["overlay_line_start_utc"] = None
-        session_info["overlay_line_start_uk"] = None
-        session_info["overlay_line_start_broker"] = None
-
-        print("\n✅ SESSION_START_MODE='now' selected.")
-        print("✅ Using normal recent MT5 warmup, same as before.")
-        return None, session_info
-
-    if session_start_mode not in {"preset", "manual"}:
-        raise ValueError(
-            "session_start_mode must be one of: 'now', 'preset', or 'manual'."
-        )
+    if use_recent_anchor:
+        session_info["mode"] = "recent"
 
     try:
+        mt5_timestamp_offset_minutes = detect_mt5_timestamp_offset_minutes(symbol)
+        session_info["mt5_timestamp_offset_minutes"] = mt5_timestamp_offset_minutes
+        print(f"✅ Detected MT5 timestamp offset: {mt5_timestamp_offset_minutes:+d} minutes")
+
+        if broker_timezone_name is not None and mt5_timestamp_offset_minutes != 0:
+            broker_clock = timezone(timedelta(minutes=mt5_timestamp_offset_minutes))
+            session_info["broker_timezone_name"] = str(broker_clock)
+            for field in ("start", "end", "session_open"):
+                utc_time = session_info.get(f"{field}_utc")
+                session_info[f"{field}_broker"] = (
+                    utc_time.astimezone(broker_clock) if utc_time is not None else None
+                )
+
         replay_warmup_bars = max(int(replay_warmup_bars), 0)
+        initial_df = None
+
+        if use_recent_anchor:
+            if type(recent_anchor_bars) is not int or recent_anchor_bars < 1:
+                raise ValueError("RECENT_ANCHOR_BARS must be a positive integer.")
+
+            anchor_bars = recent_anchor_bars
+            session_info["label"] = f"Now w/ warmup ({anchor_bars}-candle VWAP seed)"
+            launch_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
+            cutoff = (launch_minute - pd.Timedelta(minutes=1)).to_pydatetime()
+
+            initial_df = load_mt5_live(
+                symbol,
+                timeframe_mt5,
+                n_bars=anchor_bars + replay_warmup_bars,
+                end_time_utc=cutoff,
+                mt5_timestamp_offset_minutes=mt5_timestamp_offset_minutes,
+            )
+            initial_df = initial_df.loc[initial_df["datetime"] < launch_minute]
+            initial_df = initial_df.drop_duplicates(subset="datetime")
+            if len(initial_df) < anchor_bars:
+                raise RuntimeError(f"Recent mode needs {anchor_bars} completed M1 candles.")
+
+            anchor = initial_df["datetime"].iloc[-anchor_bars].to_pydatetime()
+            session_info["start_utc"] = anchor
+            session_info["start_uk"] = anchor.astimezone(session_info["start_uk"].tzinfo)
+            start_broker = session_info["start_broker"]
+            if start_broker is not None:
+                session_info["start_broker"] = anchor.astimezone(start_broker.tzinfo)
+
+        print("\n" + format_session_summary(session_info))
+
 
         # M1 assumption:
         # 1 bar = 1 minute, so 200 bars = 200 minutes.
@@ -140,12 +141,17 @@ def prepare_live_startup(
         )
         print(f"✅ Replay warmup bars:       {replay_warmup_bars}")
 
-        initial_df = load_mt5_range(
-            symbol=symbol,
-            timeframe_mt5=timeframe_mt5,
-            start_time_utc=data_start_utc,
-            end_time_utc=session_info["end_utc"],
-        )
+        if initial_df is None:
+            initial_df = load_mt5_range(
+                symbol=symbol,
+                timeframe_mt5=timeframe_mt5,
+                start_time_utc=data_start_utc,
+                end_time_utc=session_info["end_utc"],
+                mt5_timestamp_offset_minutes=mt5_timestamp_offset_minutes,
+            )
+        else:
+            initial_df = initial_df.loc[initial_df["datetime"] >= data_start_utc]
+            initial_df = initial_df.reset_index(drop=True)
 
         session_info["startup_rebuild_used"] = True
 
@@ -160,6 +166,6 @@ def prepare_live_startup(
     except Exception as exc:
         session_info["startup_rebuild_used"] = False
 
-        print("\n⚠️ Session rebuild failed. Falling back to normal live startup.")
+        print("\n⚠️ Could not load history for the selected VWAP anchor.")
         print(f"Reason: {exc}")
         return None, session_info

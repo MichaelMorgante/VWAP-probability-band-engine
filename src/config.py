@@ -28,6 +28,10 @@ CONFIG = {
     'rolling_window': 30,
     'vol_method': 'ewma',
 
+    # Gaussian ghost bands
+    'ghost_lookback_bars': 20,
+    'ghost_upper_percentiles': (0.85, 0.95, 0.995),
+
     # Zone thresholds
     'zone_thresholds': [0.5, 1.0, 2.0],
 

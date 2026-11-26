@@ -7,6 +7,8 @@ from src.lookup import lookup_probabilities
 from src.zones import classify_zone
 from src.adaptive_trend_health import update_adaptive_trend_health
 
+from statistics import NormalDist
+
 
 @dataclass
 class EngineState:
@@ -43,6 +45,24 @@ class EngineState:
     _vol_ema:          float  = 0.0
 
 
+    ghost_bands: dict[str, float] = field(default_factory=dict)
+    _ghost_gaps: list[float] = field(default_factory=list)
+
+    ghost_distribution: NormalDist | None = None
+
+    def ghost_stats_at_price(self, price: float) -> dict[str, float] | None:
+        distribution = self.ghost_distribution
+        if distribution is None:
+            return None
+
+        cdf = distribution.cdf(price)
+        return {
+            "pdf": distribution.pdf(price),
+            "cdf": cdf,
+            "upper_tail": 1.0 - cdf,
+        }
+
+
 def update_engine_state(state: EngineState, bar: dict,
                         config: dict,
                         prob_table: pd.DataFrame,
@@ -63,9 +83,7 @@ def update_engine_state(state: EngineState, bar: dict,
     typ_price = (high + low + close) / 3.0
     session   = bar.get('session_id') or (ts.date() if hasattr(ts, 'date') else ts)
 
-    # ── Session reset ──
-# ── Session tracking only: do NOT hard-reset VWAP at session boundary ──
-# ── Session tracking only: do NOT hard-reset VWAP at session boundary ──
+    # Track the session without resetting the reference automatically.
     if state._session_date is None:
         state._session_date = session
         state.session_bar_count = 0
@@ -75,6 +93,22 @@ def update_engine_state(state: EngineState, bar: dict,
     # ── Reference line ──
     ref_type = config['reference_type']
     if ref_type == 'VWAP':
+        anchor_utc = config.get('vwap_anchor_utc')
+        if (
+            anchor_utc is not None
+            and ts >= anchor_utc
+            and (state.datetime is None or state.datetime < anchor_utc)
+        ):
+            # Start a fresh VWAP and reference history with the warmed variance.
+            state._cum_pv = 0.0
+            state._cum_v = 0.0
+            state._session_date = session
+            state.session_bar_count = 1
+            state._ref_history = []
+            state._z_history = []
+            state._ath_history = []
+            state._ghost_gaps = []
+
         state._cum_pv += typ_price * volume
         state._cum_v  += volume
         reference = state._cum_pv / state._cum_v
@@ -96,6 +130,30 @@ def update_engine_state(state: EngineState, bar: dict,
         state._ewma_var = (1 - lam) * deviation**2 + lam * state._ewma_var
     sigma = max(np.sqrt(state._ewma_var), 1e-10)
 
+    # ── Gaussian ghost bands ──
+    state.ghost_bands = {}
+    state.ghost_distribution = None
+    ghost_lookback = config.get('ghost_lookback_bars', 0)
+    if ref_type == 'VWAP' and ghost_lookback > 0 and state._ref_history:
+        # Measure the close against the VWAP that was visible during this bar.
+        gap = close - state.reference
+        state._ghost_gaps = (state._ghost_gaps + [gap])[-ghost_lookback:]
+
+        if len(state._ghost_gaps) == ghost_lookback:
+            ghost_variance = float(np.mean(np.square(state._ghost_gaps)))
+            ghost_sigma = float(np.sqrt(ghost_variance))
+            green, orange, red = config['ghost_upper_percentiles']
+            if not 0.5 < green < orange < red < 1.0:
+                raise ValueError("Ghost percentiles must increase between 0.5 and 1.0.")
+
+            if ghost_sigma > 0.0:
+                distribution = NormalDist(mu=reference, sigma=ghost_sigma)
+                state.ghost_distribution = distribution
+                for band, percentile in enumerate((green, orange, red), start=1):
+                    state.ghost_bands[f'{band}+'] = distribution.inv_cdf(percentile)
+                    state.ghost_bands[f'{band}-'] = distribution.inv_cdf(1.0 - percentile)
+
+    
     # ── Z-score and zone ──
     z_score = (close - reference) / sigma
     zone    = classify_zone(z_score, config['zone_thresholds'])

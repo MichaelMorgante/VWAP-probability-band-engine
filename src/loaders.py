@@ -75,7 +75,14 @@ def load_mt5_csv(path: str) -> pd.DataFrame:
 # LOADER 2 — MT5 Live API
 # Called from run_live.py — returns the same schema as load_mt5_csv
 # ──────────────────────────────────────────────────────────────
-def load_mt5_live(symbol: str, timeframe_mt5, n_bars: int = 500) -> pd.DataFrame:
+def load_mt5_live(
+    symbol: str,
+    timeframe_mt5,
+    n_bars: int = 500,
+    *,
+    end_time_utc: datetime | None = None,
+    mt5_timestamp_offset_minutes: int = 0,
+) -> pd.DataFrame:
     """
     Pull recent bars from MT5 via the MetaTrader5 Python package.
     Returns the same normalised DataFrame as all other loaders.
@@ -94,7 +101,13 @@ def load_mt5_live(symbol: str, timeframe_mt5, n_bars: int = 500) -> pd.DataFrame
     except ImportError:
         raise ImportError("MetaTrader5 package not installed. Run: pip install MetaTrader5")
 
-    rates = mt5.copy_rates_from_pos(symbol, timeframe_mt5, 0, n_bars)
+    offset = timedelta(minutes=mt5_timestamp_offset_minutes)
+    if end_time_utc is None:
+        rates = mt5.copy_rates_from_pos(symbol, timeframe_mt5, 0, n_bars)
+    else:
+        rates = mt5.copy_rates_from(
+            symbol, timeframe_mt5, end_time_utc + offset, n_bars
+        )
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"MT5 returned no data for {symbol}. Is terminal connected?")
 
@@ -108,7 +121,7 @@ def load_mt5_live(symbol: str, timeframe_mt5, n_bars: int = 500) -> pd.DataFrame
         'tick_volume':  'tick_volume',
         'real_volume':  'real_volume',
     })
-    df['datetime'] = pd.to_datetime(df['datetime'], unit='s', utc=True)
+    df['datetime'] = pd.to_datetime(df['datetime'], unit='s', utc=True) - offset
     print(f"✅ MT5 Live loaded: {len(df):,} bars for {symbol}")
     return _normalise(df)
 
@@ -117,6 +130,8 @@ def load_mt5_range(
     timeframe_mt5,
     start_time_utc: datetime,
     end_time_utc: datetime,
+    *,
+    mt5_timestamp_offset_minutes: int = 0,
 ) -> pd.DataFrame:
     """
     Pull bars from MT5 between two UTC datetimes.
@@ -156,11 +171,12 @@ def load_mt5_range(
             f"Got {start_time_utc} >= {end_time_utc}"
         )
 
+    offset = timedelta(minutes=mt5_timestamp_offset_minutes)
     rates = mt5.copy_rates_range(
         symbol,
         timeframe_mt5,
-        start_time_utc,
-        end_time_utc,
+        start_time_utc + offset,
+        end_time_utc + offset,
     )
 
     if rates is None or len(rates) == 0:
@@ -184,7 +200,7 @@ def load_mt5_range(
         }
     )
 
-    df["datetime"] = pd.to_datetime(df["datetime"], unit="s", utc=True)
+    df["datetime"] = pd.to_datetime(df["datetime"], unit="s", utc=True) - offset
 
     print(
         f"✅ MT5 range loaded: {len(df):,} bars for {symbol} "

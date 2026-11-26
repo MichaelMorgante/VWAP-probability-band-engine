@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.context_overlay import compute_context_vwap
+from src.loaders import load_mt5_range
 
 
 def compute_reference_shift(state, lookback: int = 5) -> float:
@@ -116,6 +117,16 @@ def write_live_context(
 
     print(f"✅ Context written: {output_path} ({len(points)} points)")
 
+def format_ghost_percentile(probability: float) -> str:
+    percentile = round(probability * 100.0, 6)
+    whole = int(percentile)
+    suffix = "th"
+    if percentile == whole and whole % 100 not in (11, 12, 13):
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(whole % 10, "th")
+    return f"{percentile:g}{suffix}"
+
+
+
 def run_live(symbol: str, timeframe_mt5, config: dict,
              prob_table: pd.DataFrame,
              marginal_table: pd.DataFrame = None,
@@ -161,19 +172,27 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
 
     mt5_files_dir = Path(mt5.terminal_info().data_path) / "MQL5" / "Files"
     mt5_files_dir.mkdir(parents=True, exist_ok=True)
-    output_path = mt5_files_dir / "live_state.json"
+    output_path = mt5_files_dir / config.get("live_state_filename", "live_state.json")
 
     # ── Warm up engine ──
-    if initial_df is not None:
-        warmup_df = initial_df.copy()
-        print(f"✅ Using preloaded startup dataframe: {len(warmup_df):,} bars")
+    startup_replay_active = (
+        session_info is not None
+        and session_info.get("mode") in {"recent", "now", "manual", "preset"}
+    )
+    mt5_timestamp_offset_minutes = 0
+    if startup_replay_active:
+        if initial_df is None or not session_info.get("startup_rebuild_used"):
+            raise RuntimeError("Could not rebuild the anchored session. Check MT5 history.")
 
-        if session_info is not None:
-            print(
-                "✅ Startup session: "
-                f"{session_info.get('label', 'unknown')} "
-                f"| mode={session_info.get('mode', 'unknown')}"
-            )
+        mt5_timestamp_offset_minutes = session_info.get("mt5_timestamp_offset_minutes", 0)
+        config = {**config, "vwap_anchor_utc": session_info["start_utc"]}
+        current_minute = pd.Timestamp(session_info["end_utc"]).floor("min")
+        warmup_df = initial_df.loc[initial_df["datetime"] < current_minute]
+        warmup_df = warmup_df.drop_duplicates(subset="datetime")
+        print(f"✅ Startup session: {session_info['label']}")
+    elif initial_df is not None:
+        warmup_df = initial_df
+        print(f"✅ Using preloaded startup dataframe: {len(warmup_df):,} bars")
     else:
         warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
         print(f"✅ Using normal MT5 live warmup: {len(warmup_df):,} bars")
@@ -185,38 +204,18 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
         warmup_df = warmup_df.sort_values("datetime").reset_index(drop=True)
 
     state = EngineState()
-
     for _, row in warmup_df.iterrows():
         state = update_engine_state(
-            state,
-            row.to_dict(),
-            config,
-            prob_table,
-            marginal_table,
+            state, row.to_dict(), config, prob_table, marginal_table
         )
 
     print(f"✅ Live engine warmed up on {len(warmup_df):,} bars")
-    # If preset/manual startup replay was used, the warmup dataframe already
-    # contains candles up to the current/latest available bar.
-    #
-    # Set last_bar_time to the final replayed candle so the live loop continues
-    # AFTER the replay, instead of processing the same latest candle again.
-    #
-    # In normal "now" mode, keep last_bar_time=None to preserve existing behaviour.
-    startup_replay_active = (
-        initial_df is not None
-        and session_info is not None
-        and bool(session_info.get("startup_rebuild_used", False))
-    )
+    last_bar_time = None
+    if startup_replay_active:
+        last_replayed_bar = warmup_df["datetime"].iloc[-1]
+        last_bar_time = int(last_replayed_bar.timestamp())
+        print(f"✅ Live loop will continue after: {last_replayed_bar}")
 
-    if startup_replay_active and "datetime" in warmup_df.columns:
-        last_bar_time = pd.to_datetime(warmup_df["datetime"].max(), utc=True)
-        print(f"✅ Startup replay complete. Live loop will continue after: {last_bar_time}")
-    else:
-        last_bar_time = None
-
-    # last_bar_time is set after warmup.
-    # In normal "now" mode it remains None, preserving old behaviour.
     signal_state = 'NO_SIGNAL'   # state machine
     active_signal = None         # the SignalResult currently active
     reconnect_wait = 1
@@ -226,34 +225,75 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
         while True:
             try:
                 rates = mt5.copy_rates_from_pos(symbol, timeframe_mt5, 1, 1)
+                recovered_bars = None
+
+                if rates is not None and len(rates) > 0:
+                    bar_time = (
+                        int(rates[0]["time"]) - mt5_timestamp_offset_minutes * 60
+                    )
+                    if (
+                        startup_replay_active
+                        and timeframe_mt5 == mt5.TIMEFRAME_M1
+                        and last_bar_time is not None
+                        and bar_time > last_bar_time + 60
+                    ):
+                        previous_bar = pd.Timestamp(last_bar_time, unit="s", tz="UTC")
+                        latest_bar = pd.Timestamp(bar_time, unit="s", tz="UTC")
+                        history = load_mt5_range(
+                            symbol,
+                            timeframe_mt5,
+                            (previous_bar + pd.Timedelta(minutes=1)).to_pydatetime(),
+                            latest_bar.to_pydatetime(),
+                            mt5_timestamp_offset_minutes=mt5_timestamp_offset_minutes,
+                        )
+                        if not history["datetime"].eq(latest_bar).any():
+                            raise RuntimeError(
+                                "MT5 catch-up history has not reached the latest closed candle."
+                            )
+
+                        missed = (
+                            history["datetime"].gt(previous_bar)
+                            & history["datetime"].lt(latest_bar)
+                        )
+                        recovered_bars = (
+                            history.loc[missed]
+                            .drop_duplicates(subset="datetime")
+                            .sort_values("datetime")
+                        )
             except Exception as e:
                 print(f"⚠️  MT5 read error: {e} — retrying in {reconnect_wait}s")
                 time.sleep(reconnect_wait)
                 reconnect_wait = min(reconnect_wait * 2, 60)
                 continue
 
-            reconnect_wait = 1  # reset on success
+            reconnect_wait = 1
 
             if rates is None or len(rates) == 0:
                 time.sleep(1)
                 continue
 
-            bar_time = rates[0]['time']
-            if bar_time == last_bar_time:
+            if last_bar_time is not None and bar_time <= last_bar_time:
                 time.sleep(1)
                 continue
 
-            last_bar_time = bar_time
-            bar = {
-                'datetime':    pd.Timestamp(bar_time, unit='s', tz='UTC'),
-                'open':        float(rates[0]['open']),
-                'high':        float(rates[0]['high']),
-                'low':         float(rates[0]['low']),
-                'close':       float(rates[0]['close']),
-                'tick_volume': float(rates[0]['tick_volume']),
-            }
+            if recovered_bars is not None and not recovered_bars.empty:
+                for recovered_bar in recovered_bars.to_dict("records"):
+                    state = update_engine_state(
+                        state, recovered_bar, config, prob_table, marginal_table
+                    )
+                print(f"✅ Replayed {len(recovered_bars)} missed closed M1 candles")
 
+            rate = rates[0]
+            bar = {
+                "datetime": pd.Timestamp(bar_time, unit="s", tz="UTC"),
+                "open": float(rate["open"]),
+                "high": float(rate["high"]),
+                "low": float(rate["low"]),
+                "close": float(rate["close"]),
+                "tick_volume": float(rate["tick_volume"]),
+            }
             state = update_engine_state(state, bar, config, prob_table, marginal_table)
+            last_bar_time = bar_time
             sig = generate_signal(state, config)
             sig = regime_gate(sig, config)
             sig = apply_filters(sig, state, config)
@@ -353,6 +393,28 @@ def run_live(symbol: str, timeframe_mt5, config: dict,
                 'band_3p':       round(state.bands.get('3+', 0), 5),
                 'band_3n':       round(state.bands.get('3-', 0), 5),
             }
+            
+            ghost_distribution = state.ghost_distribution
+            ghost_stats = state.ghost_stats_at_price(state.close)
+            if ghost_distribution is not None and ghost_stats is not None:
+                ghost_sigma = ghost_distribution.stdev
+                ghost_z = (state.close - ghost_distribution.mean) / ghost_sigma
+                ghost_tail = min(ghost_stats["cdf"], ghost_stats["upper_tail"])
+                live_state_dict.update(
+                    ghost_sigma=round(ghost_sigma, 5),
+                    ghost_z=round(ghost_z, 6),
+                    ghost_tail_pct=round(100.0 * ghost_tail, 4),
+                )
+            ghost_bands = getattr(state, "ghost_bands", {}) or {}
+            for band in (1, 2, 3):
+                live_state_dict[f'ghost_{band}p'] = round(ghost_bands.get(f'{band}+', 0.0), 5)
+                live_state_dict[f'ghost_{band}n'] = round(ghost_bands.get(f'{band}-', 0.0), 5)
+
+            for band, percentile in enumerate(config.get("ghost_upper_percentiles", ()), start=1):
+                live_state_dict[f'ghost_label_{band}p'] = format_ghost_percentile(percentile)
+                live_state_dict[f'ghost_label_{band}n'] = format_ghost_percentile(1.0 - percentile)
+
+
             if session_info is not None:
                 start_uk = session_info.get("start_uk")
                 start_broker = session_info.get("start_broker")
@@ -461,7 +523,7 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
     mt5_files_dir.mkdir(parents=True, exist_ok=True)
     output_path = mt5_files_dir / "live_state.json"
 
-    # ── Warm up engine ──
+        # ── Warm up engine ──
     warmup_df = load_mt5_live(symbol, timeframe_mt5, n_bars=200)
 
     if 'sessions' in config:
@@ -483,6 +545,7 @@ def run_live_with_context(symbol: str, timeframe_mt5, config: dict,
     print(f"✅ Live engine warmed up on {len(warmup_df)} bars")
 
     last_bar_time = None
+
     signal_state = 'NO_SIGNAL'
     active_signal = None
     reconnect_wait = 1
