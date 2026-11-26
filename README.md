@@ -32,6 +32,10 @@ It now supports:
 - optional runner-mode / exit-management research,
 - trade-log, skipped-signal, daily-summary, and config-snapshot exports,
 - multi-dataset comparison across calm, volatile, Ukraine-war, recent, 30-day, and 1-year Nasdaq regimes.
+- Gaussian quantile-based probability bands alongside structural RMS bands,
+- model-implied tail probabilities and distribution statistics,
+- configurable session anchoring and chronological state reconstruction,
+- empirical Gaussian calibration and comparative boundary-interaction research,
 
 The long-term purpose is to develop a modular research workflow where each strategy idea can be isolated, tested, compared, and later promoted into a cleaner `.py` execution/backtest engine if it proves robust.
 
@@ -58,6 +62,28 @@ The overlay is designed for discretionary monitoring and research validation. It
 The full-band view shows the wider VWAP probability structure, including outer sigma bands, VWAP, session distance, and the live probability/state panel.
 
 ![Full VWAP probability band view](docs/images/mt5-full-bands-view.png)
+
+### Gaussian Probability Bands
+
+The latest implementation extends the original VWAP RMS displacement bands with Gaussian quantile-based probability boundaries, displayed as lighter "ghost bands" alongside the existing structural bands.
+
+The Gaussian boundaries correspond to the following percentiles:
+
+| Band | Lower percentile | Upper percentile |
+|---|---:|---:|
+| Green | 15th | 85th |
+| Orange | 5th | 95th |
+| Red | 0.5th | 99.5th |
+
+Both band constructions update using completed M1 candles, providing complementary views of intraday price displacement.
+
+The overlay also displays the estimated Gaussian scale, standardised price displacement and model-implied tail probability.
+
+![Live MT5 Gaussian probability-band overlay](docs/images/mt5-gaussian-probability-bands-MR.PNG)
+
+*Live US100 M1 snapshot illustrating mean-reversion behaviour around the lower orange region and the distinction between structural RMS bands and Gaussian quantile boundaries.*
+
+The Gaussian specification is an initial probabilistic benchmark. Its empirical calibration, distributional assumptions and boundary interactions remain subjects of ongoing statistical research.
 
 ## Intraday VWAP Probability Bands Under Discrete-Time Market Data
 
