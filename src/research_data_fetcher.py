@@ -56,6 +56,9 @@ class AcquisitionResult:
     requested_end_exclusive: datetime
     candles: pd.DataFrame
     chunks: tuple[ChunkResult, ...]
+    chunk_days: int
+    started_at_utc: datetime
+    finished_at_utc: datetime
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -153,6 +156,8 @@ def fetch_raw_mt5_candles(
                 "M1 request boundaries must be minute-aligned."
             )
 
+    started_at_utc = datetime.now(timezone.utc)
+
     frames = []
     chunk_results = []
 
@@ -231,4 +236,7 @@ def fetch_raw_mt5_candles(
         requested_end_exclusive=end_utc_exclusive,
         candles=candles,
         chunks=tuple(chunk_results),
+        chunk_days=chunk_days,
+        started_at_utc=started_at_utc,
+        finished_at_utc=datetime.now(timezone.utc),
     )
