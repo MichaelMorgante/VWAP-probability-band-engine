@@ -28,7 +28,7 @@
     "artifacts/research_tables/serial_dependence.csv": "4ec482a2aeaa2b8812eefb4dc2ead80887cff08f05e41ee2efebfe086f92d7f3",
     "artifacts/research_tables/solid_baseline.csv": "dbc6a9d64cb5403a9eedd2ec672560e5895d4a861786d51b15a754b1bcee5b1a"
   },
-  "baseline_experiment_id": "5ddcb1e3944003ec",
+  "baseline_experiment_id": "65d10b85202c7ed8",
   "bootstrap": {
     "confidence_level": 0.95,
     "method": "paired_whole_session",
@@ -104,7 +104,7 @@
     ],
     "reference_type": "VWAP"
   },
-  "notebook_source_sha256": "9f4e1ee8699b3175dbbc6daac6537004ae9bf9b52a129079a05cd10526b2fbc6",
+  "notebook_source_sha256": "01c2bec05665949d25df2a72210c2b65afb7a4aa57c63b9a8ea5054e77cafbec",
   "plot_theme": "hybrid",
   "research_phase": 2,
   "research_role": "known_development",
@@ -137,7 +137,7 @@
     "python": "3.11.9",
     "scipy": "1.17.1"
   },
-  "source_git_commit": "1b20be66c890bb100dd260bb3d771c5d7b8ed1c0",
+  "source_git_commit": "7b7c22bcfea8f8b3ffa63916ef5d9538fc64ceed",
   "source_sha256": {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "src/adaptive_trend_health.py": "601d0a5c7090b0bb383ac597e26ec66e92f1c52662007ec395e0920faf51ae2a",
