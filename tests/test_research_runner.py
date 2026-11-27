@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 
 from src.config import CONFIG
+from src.engine import EngineState, update_engine_state
+from src.replay import run_replay
 from src.research_runner import run_historical_session
 
 
@@ -292,6 +294,338 @@ class TestHistoricalResearchRunner(unittest.TestCase):
             self.assertTrue(
                 result[f"prior_{column}"].isna().all()
             )
+
+    def test_existing_replay_engine_parity(self):
+
+        candles = self.candles.copy()
+
+        # Introduce non-uniform volume and asymmetric
+        # candles to exercise the weighted calculations.
+        candles["tick_volume"] = (
+            100 + 10 * np.arange(len(candles))
+        )
+
+        candles["high"] += (
+            np.arange(len(candles)) % 5
+        )
+
+        config = deepcopy(self.config)
+
+        config["vwap_anchor_utc"] = self.anchor
+
+        reconstructed = run_historical_session(
+            candles,
+            config,
+            anchor_utc=self.anchor,
+        )
+
+        empty_table = pd.DataFrame(
+            columns=["zone"]
+        )
+
+        replay = run_replay(
+            candles,
+            deepcopy(config),
+            empty_table,
+            EngineState=EngineState,
+            update_engine_state=update_engine_state,
+            speed=100_000.0,
+        )
+
+        replay_count = 0
+
+        for i, state in enumerate(replay):
+
+            row = reconstructed.iloc[i]
+
+            self.assertEqual(
+                row["datetime"],
+                state.datetime,
+            )
+
+            for field in [
+                "close",
+                "reference",
+                "sigma",
+                "z_score",
+            ]:
+
+                self.assertAlmostEqual(
+                    row[field],
+                    getattr(state, field),
+                    places=9,
+                )
+
+            self.assertEqual(
+                row["session_bar_count"],
+                state.session_bar_count,
+            )
+
+            self.assertEqual(
+                row["ghost_ready"],
+                state.ghost_distribution is not None,
+            )
+
+            for key, value in state.bands.items():
+
+                self.assertAlmostEqual(
+                    row[f"solid_{key}"],
+                    value,
+                    places=9,
+                )
+
+                if key in state.ghost_bands:
+
+                    self.assertAlmostEqual(
+                        row[f"ghost_{key}"],
+                        state.ghost_bands[key],
+                        places=9,
+                    )
+
+                else:
+
+                    self.assertTrue(
+                        pd.isna(row[f"ghost_{key}"])
+                    )
+
+            if state.ghost_distribution is not None:
+
+                self.assertAlmostEqual(
+                    row["ghost_sigma"],
+                    state.ghost_distribution.stdev,
+                    places=9,
+                )
+
+            replay_count += 1
+
+        self.assertEqual(
+            replay_count,
+            len(reconstructed),
+        )
+
+    def test_deterministic_reconstruction(self):
+
+        first = self.run_session()
+
+        second = self.run_session()
+
+        pd.testing.assert_frame_equal(
+            first,
+            second,
+            check_exact=True,
+        )
+
+    def test_truncation_invariance(self):
+
+        full = self.run_session()
+
+        anchor_position = int(
+            self.candles.index[
+                self.candles["datetime"].eq(
+                    self.anchor
+                )
+            ][0]
+        )
+
+        checkpoints = [
+            anchor_position + 1,
+            anchor_position + 10,
+            len(self.candles) - 5,
+        ]
+
+        for end in checkpoints:
+
+            with self.subTest(end=end):
+
+                truncated = run_historical_session(
+                    self.candles.iloc[:end].copy(),
+                    self.config,
+                    anchor_utc=self.anchor,
+                )
+
+                pd.testing.assert_frame_equal(
+                    full.iloc[:end].reset_index(
+                        drop=True
+                    ),
+                    truncated.reset_index(
+                        drop=True
+                    ),
+                    check_exact=True,
+                    check_dtype=False,
+                )
+
+    def test_current_and_future_candle_perturbation(self):
+
+        original = self.run_session()
+
+        altered_candles = self.candles.copy()
+
+        shock_index = 40
+
+        price_columns = [
+            "open",
+            "high",
+            "low",
+            "close",
+        ]
+
+        altered_candles.loc[
+            shock_index:,
+            price_columns,
+        ] += 500.0
+
+        altered = run_historical_session(
+            altered_candles,
+            self.config,
+            anchor_utc=self.anchor,
+        )
+
+        # Every historical observation before the
+        # artificial shock must remain identical.
+        pd.testing.assert_frame_equal(
+            original.iloc[:shock_index],
+            altered.iloc[:shock_index],
+            check_exact=True,
+        )
+
+        prior_columns = [
+            column
+            for column in original.columns
+            if column.startswith("prior_")
+        ]
+
+        # The shock candle cannot influence the
+        # estimates that existed before it.
+        pd.testing.assert_series_equal(
+            original.loc[
+                shock_index,
+                prior_columns,
+            ],
+            altered.loc[
+                shock_index,
+                prior_columns,
+            ],
+            check_exact=True,
+        )
+
+        # The updated state should respond to the shock.
+        self.assertNotEqual(
+            original.loc[shock_index, "reference"],
+            altered.loc[shock_index, "reference"],
+        )
+
+        self.assertNotEqual(
+            original.loc[shock_index, "sigma"],
+            altered.loc[shock_index, "sigma"],
+        )
+
+    def test_independent_mathematical_verification(self):
+
+        candles = self.candles.copy()
+
+        candles["tick_volume"] = (
+            100 + 10 * np.arange(len(candles))
+        )
+
+        candles["high"] += (
+            np.arange(len(candles)) % 5
+        )
+
+        result = run_historical_session(
+            candles,
+            self.config,
+            anchor_utc=self.anchor,
+        )
+
+        typical = (
+            candles["high"]
+            + candles["low"]
+            + candles["close"]
+        ) / 3.0
+
+        volume = candles["tick_volume"]
+
+        post_anchor = candles["datetime"].ge(
+            self.anchor
+        )
+
+        # Independent cumulative weighted VWAP,
+        # with separate pre-anchor and post-anchor
+        # accumulation.
+        expected_reference = (
+            (typical * volume)
+            .groupby(post_anchor)
+            .cumsum()
+            / volume.groupby(post_anchor).cumsum()
+        )
+
+        np.testing.assert_allclose(
+            result["reference"],
+            expected_reference,
+            rtol=1e-10,
+            atol=1e-9,
+        )
+
+        # Independent EWMA RMS calculation.
+        # Dispersion is retained across the anchor.
+        squared_deviation = (
+            candles["close"] - expected_reference
+        ).pow(2)
+
+        expected_variance = squared_deviation.ewm(
+            halflife=self.config["ewma_halflife"],
+            adjust=False,
+        ).mean()
+
+        expected_sigma = np.maximum(
+            np.sqrt(expected_variance),
+            1e-10,
+        )
+
+        np.testing.assert_allclose(
+            result["sigma"],
+            expected_sigma,
+            rtol=1e-10,
+            atol=1e-9,
+        )
+
+        # Independent Gaussian gap RMS.
+        # The anchor candle has no preceding
+        # post-anchor VWAP.
+        lookback = self.config[
+            "ghost_lookback_bars"
+        ]
+
+        post_reference = expected_reference.loc[
+            post_anchor
+        ]
+
+        post_close = candles.loc[
+            post_anchor, "close"
+        ]
+
+        gaps = post_close - post_reference.shift(1)
+
+        expected_ghost_sigma = np.sqrt(
+            gaps.pow(2).rolling(
+                window=lookback,
+                min_periods=lookback,
+            ).mean()
+        )
+
+        expected_ghost_sigma = (
+            expected_ghost_sigma.where(
+                expected_ghost_sigma.gt(0)
+            )
+        )
+
+        np.testing.assert_allclose(
+            result.loc[post_anchor, "ghost_sigma"],
+            expected_ghost_sigma,
+            rtol=1e-10,
+            atol=1e-9,
+            equal_nan=True,
+        )
 
 if __name__ == "__main__":
     unittest.main()
