@@ -1,0 +1,5 @@
+split,first_observed_date,last_observed_date,observed_days,observations
+development,2022-01-02,2024-12-31,933,1050678
+known_development,2025-01-01,2025-12-31,312,348815
+validation,2026-01-01,2026-06-30,155,173700
+retrospective_holdout,2026-07-01,2026-11-26,128,145017
