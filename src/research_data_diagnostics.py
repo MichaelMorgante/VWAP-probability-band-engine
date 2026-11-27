@@ -363,7 +363,11 @@ def diagnose_acquisition(
         elif missing_count:
             coverage_status = "partial"
 
-        elif unexpected_count or outside_rows:
+        elif (
+            unexpected_count
+            or outside_rows
+            or (~valid).any()
+        ):
             coverage_status = "unexpected_observations"
 
         elif expected_count == 0:
