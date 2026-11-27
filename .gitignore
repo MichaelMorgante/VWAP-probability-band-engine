@@ -33,3 +33,11 @@ logs/*.jsonl
 !logs/.gitkeep
 
 research_outputs/experiment_snapshots/
+
+# Curated statistical research artifacts
+!artifacts/research_figures/
+!artifacts/research_figures/*.png
+
+!artifacts/research_tables/
+!artifacts/research_tables/*.csv
+!artifacts/research_tables/experiment_metadata.json

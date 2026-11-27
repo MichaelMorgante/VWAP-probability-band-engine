@@ -1,2 +1,6 @@
 # Exclude Jupyter notebooks from GitHub language statistics
 *.ipynb linguist-vendored
+
+# Preserve research artifact checksums
+artifacts/research_tables/*.csv -text
+artifacts/research_tables/*.json -text
