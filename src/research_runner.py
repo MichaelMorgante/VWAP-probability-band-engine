@@ -23,8 +23,14 @@ def run_historical_session(
     The caller supplies the experimental anchor and
     observation window. No warmup duration is assumed.
 
-    Returned values describe the updated state after each
-    candle closes, not predictions made before that candle.
+    Unprefixed values describe the updated state after
+    each candle closes.
+
+    Columns prefixed with prior_ describe the preceding
+    completed candle's mathematical state.
+
+    Snapshots contain independent scalar values rather
+    than references to mutable engine state.
     """
     required = [
         "datetime",
@@ -114,6 +120,7 @@ def run_historical_session(
 
     state = EngineState()
     observations = []
+    previous_snapshot = None
 
     for timestamp, row in zip(
         timestamps,
@@ -134,12 +141,13 @@ def run_historical_session(
             empty_prob_table,
         )
 
-        observation = {
+        # Capture the updated mathematical state using
+        # scalar values rather than mutable state references.
+        snapshot = {
             "datetime": timestamp,
             "available_at_utc": (
                 timestamp + pd.Timedelta(minutes=1)
             ),
-            "anchor_utc": anchor,
             "is_post_anchor": timestamp >= anchor,
             "close": state.close,
             "reference": state.reference,
@@ -156,16 +164,57 @@ def run_historical_session(
             ),
         }
 
-        observation.update({
+        snapshot.update({
             f"solid_{key}": value
             for key, value in state.bands.items()
         })
 
-        observation.update({
-            f"ghost_{key}": value
-            for key, value in state.ghost_bands.items()
+        # Preserve a consistent schema even when the
+        # Gaussian distribution is not yet available.
+        snapshot.update({
+            f"ghost_{key}": state.ghost_bands.get(
+                key, np.nan
+            )
+            for key in state.bands
         })
 
+        observation = {
+            "anchor_utc": anchor,
+            **snapshot,
+            "prior_exists": previous_snapshot is not None,
+        }
+
+        # The prior snapshot contains only the values
+        # captured after processing the preceding candle.
+        for key in snapshot:
+
+            if previous_snapshot is not None:
+
+                prior_value = previous_snapshot[key]
+
+            elif key in [
+                "datetime",
+                "available_at_utc",
+            ]:
+
+                prior_value = pd.NaT
+
+            elif key in [
+                "ghost_ready",
+                "is_post_anchor",
+            ]:
+
+                prior_value = False
+
+            else:
+
+                prior_value = np.nan
+
+            observation[f"prior_{key}"] = prior_value
+
         observations.append(observation)
+
+        # Store only the independent scalar snapshot.
+        previous_snapshot = snapshot.copy()
 
     return pd.DataFrame(observations)

@@ -147,5 +147,151 @@ class TestHistoricalResearchRunner(unittest.TestCase):
         )
 
 
+    def test_first_candle_has_no_prior_state(self):
+
+        result = self.run_session()
+
+        first = result.iloc[0]
+
+        self.assertFalse(first["prior_exists"])
+        self.assertFalse(first["prior_ghost_ready"])
+
+        self.assertTrue(
+            pd.isna(first["prior_reference"])
+        )
+
+        self.assertTrue(
+            pd.isna(first["prior_available_at_utc"])
+        )
+
+    def test_prior_matches_previous_updated_state(self):
+
+        result = self.run_session()
+
+        columns = [
+            column
+            for column in result.columns
+            if f"prior_{column}" in result.columns
+        ]
+
+        for column in columns:
+
+            with self.subTest(column=column):
+
+                pd.testing.assert_series_equal(
+                    result[f"prior_{column}"]
+                    .iloc[1:]
+                    .reset_index(drop=True),
+
+                    result[column]
+                    .iloc[:-1]
+                    .reset_index(drop=True),
+
+                    check_names=False,
+                    check_dtype=False,
+                )
+
+    def test_prior_state_available_at_candle_open(self):
+
+        result = self.run_session()
+
+        valid = result.loc[
+            result["prior_exists"]
+        ]
+
+        self.assertTrue(
+            (
+                valid["prior_available_at_utc"]
+                == valid["datetime"]
+            ).all()
+        )
+
+    def test_anchor_and_gaussian_readiness(self):
+
+        # Arbitrary synthetic test parameter.
+        # This is not a research model default.
+        self.config["ghost_lookback_bars"] = 4
+
+        result = self.run_session()
+
+        anchor_index = result.index[
+            result["datetime"].eq(self.anchor)
+        ][0]
+
+        anchor_row = result.loc[anchor_index]
+
+        # The previous warmup state exists, but belongs
+        # to the pre-anchor reference.
+        self.assertTrue(
+            anchor_row["prior_exists"]
+        )
+
+        self.assertFalse(
+            anchor_row["prior_is_post_anchor"]
+        )
+
+        self.assertTrue(
+            anchor_row["prior_ghost_ready"]
+        )
+
+        self.assertFalse(
+            anchor_row["ghost_ready"]
+        )
+
+        lookback = self.config[
+            "ghost_lookback_bars"
+        ]
+
+        first_ready = anchor_index + lookback
+
+        self.assertFalse(
+            result.loc[first_ready - 1, "ghost_ready"]
+        )
+
+        self.assertTrue(
+            result.loc[first_ready, "ghost_ready"]
+        )
+
+        self.assertFalse(
+            result.loc[first_ready, "prior_ghost_ready"]
+        )
+
+        self.assertTrue(
+            result.loc[first_ready + 1, "prior_ghost_ready"]
+        )
+
+    def test_disabled_gaussian_preserves_schema(self):
+
+        self.config["ghost_lookback_bars"] = 0
+
+        result = self.run_session()
+
+        self.assertFalse(
+            result["ghost_ready"].any()
+        )
+
+        self.assertFalse(
+            result["prior_ghost_ready"].any()
+        )
+
+        ghost_columns = [
+            column
+            for column in result.columns
+            if column.startswith("ghost_")
+            and column.endswith(("+", "-"))
+        ]
+
+        self.assertTrue(ghost_columns)
+
+        for column in ghost_columns:
+
+            self.assertTrue(
+                result[column].isna().all()
+            )
+
+            self.assertTrue(
+                result[f"prior_{column}"].isna().all()
+            )
+
 if __name__ == "__main__":
     unittest.main()
