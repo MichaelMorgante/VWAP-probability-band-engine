@@ -28,6 +28,111 @@ NATIVE_COLUMNS = [
 ]
 
 
+# Historical FTMO platform clock transitions.
+# Restricted to weekday US100.cash observations.
+FTMO_US100_DST_DATES = {
+    2022: ("2022-03-13", "2022-11-06"),
+    2023: ("2023-03-12", "2023-11-05"),
+    2024: ("2024-03-10", "2024-11-03"),
+    2025: ("2025-03-09", "2025-11-02"),
+    2026: ("2026-03-08", "2026-11-01"),
+}
+
+
+def ftmo_us100_utc_from_raw(
+    raw_seconds: pd.Series,
+) -> pd.Series:
+    """
+    Convert historical FTMO US100.cash broker-clock
+    timestamps into UTC using documented DST transitions.
+
+    Restricted to weekday observations from 2022–2026.
+
+    Raw timestamps are preserved. This function does not
+    establish trading-session completeness.
+    """
+    if (
+        not pd.api.types.is_integer_dtype(
+            raw_seconds.dtype
+        )
+        or raw_seconds.isna().any()
+    ):
+        raise ValueError(
+            "Expected integer MT5 timestamps."
+        )
+
+    raw_clock = pd.to_datetime(
+        raw_seconds,
+        unit="s",
+        utc=True,
+        errors="raise",
+    )
+
+    if (
+        raw_clock.empty
+        or raw_seconds.mod(60).ne(0).any()
+    ):
+        raise ValueError(
+            "Expected nonempty minute-aligned data."
+        )
+
+    if not raw_clock.dt.year.isin(
+        FTMO_US100_DST_DATES.keys()
+    ).all():
+        raise ValueError(
+            "Unsupported historical year."
+        )
+
+    if raw_clock.dt.day_of_week.ge(5).any():
+        raise ValueError(
+            "Weekend clock labels are unsupported."
+        )
+
+    if (
+        not raw_clock.is_unique
+        or not raw_clock.is_monotonic_increasing
+    ):
+        raise ValueError(
+            "Expected unique, ordered timestamps."
+        )
+
+    offset_hours = np.full(
+        len(raw_clock),
+        2,
+        dtype=int,
+    )
+
+    for start, end in FTMO_US100_DST_DATES.values():
+
+        summer = (
+            raw_clock.ge(
+                pd.Timestamp(start, tz="UTC")
+            )
+            & raw_clock.lt(
+                pd.Timestamp(end, tz="UTC")
+            )
+        )
+
+        offset_hours[summer.to_numpy()] = 3
+
+    corrected = raw_clock - pd.to_timedelta(
+        offset_hours,
+        unit="h",
+    )
+
+    if (
+        not corrected.is_unique
+        or not corrected.is_monotonic_increasing
+    ):
+        raise ValueError(
+            "Corrected timestamps are not unique "
+            "and ordered."
+        )
+
+    return corrected.rename(
+        "verified_datetime_utc"
+    )
+
 def diagnose_raw_candles(df: pd.DataFrame) -> dict:
     """
     Inspect raw MT5 candles without modifying observations.

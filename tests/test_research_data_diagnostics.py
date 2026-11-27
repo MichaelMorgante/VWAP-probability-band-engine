@@ -20,6 +20,8 @@ from src.research_data_diagnostics import (
     capture_mt5_source,
     sha256_file,
     build_acquisition_metadata,
+    FTMO_US100_DST_DATES,
+    ftmo_us100_utc_from_raw,
 )
 
 
@@ -407,6 +409,134 @@ class TestResearchDataDiagnostics(unittest.TestCase):
                 ]
             )
 
+
+class TestFTMOHistoricalTimestamps(unittest.TestCase):
+
+    def raw_seconds(self, timestamps):
+        return pd.Series([
+            int(pd.Timestamp(t).timestamp())
+            for t in timestamps
+        ])
+
+    def test_winter_and_summer_conversion(self):
+        raw = self.raw_seconds([
+            "2025-01-06T16:30:00+00:00",
+            "2025-07-07T16:30:00+00:00",
+        ])
+
+        corrected = ftmo_us100_utc_from_raw(raw)
+
+        expected = pd.to_datetime([
+            "2025-01-06T14:30:00+00:00",
+            "2025-07-07T13:30:00+00:00",
+        ])
+
+        self.assertEqual(
+            corrected.tolist(),
+            expected.tolist(),
+        )
+
+        ny = corrected.dt.tz_convert(
+            "America/New_York"
+        )
+
+        self.assertEqual(
+            ny.dt.strftime("%H:%M").tolist(),
+            ["09:30", "09:30"],
+        )
+
+    def test_all_historical_dst_transitions(self):
+
+        for year, dates in FTMO_US100_DST_DATES.items():
+
+            with self.subTest(year=year):
+
+                spring = pd.Timestamp(
+                    dates[0],
+                    tz="UTC",
+                )
+
+                autumn = pd.Timestamp(
+                    dates[1],
+                    tz="UTC",
+                )
+
+                raw = self.raw_seconds([
+                    spring - pd.Timedelta(days=2)
+                    + pd.Timedelta(hours=16),
+                    spring + pd.Timedelta(days=1)
+                    + pd.Timedelta(hours=16),
+                    autumn - pd.Timedelta(days=2)
+                    + pd.Timedelta(hours=16),
+                    autumn + pd.Timedelta(days=1)
+                    + pd.Timedelta(hours=16),
+                ])
+
+                corrected = (
+                    ftmo_us100_utc_from_raw(raw)
+                )
+
+                decoded = pd.to_datetime(
+                    raw,
+                    unit="s",
+                    utc=True,
+                )
+
+                offsets = (
+                    decoded - corrected
+                ).dt.total_seconds() / 3600
+
+                self.assertEqual(
+                    offsets.tolist(),
+                    [2, 3, 3, 2],
+                )
+
+    def test_raw_timestamps_remain_unchanged(self):
+        raw = self.raw_seconds([
+            "2025-06-02T16:30:00+00:00",
+        ])
+
+        original = raw.copy(deep=True)
+
+        ftmo_us100_utc_from_raw(raw)
+
+        pd.testing.assert_series_equal(
+            raw,
+            original,
+        )
+
+    def test_unsupported_year_rejected(self):
+        raw = self.raw_seconds([
+            "2021-10-04T16:30:00+00:00",
+        ])
+
+        with self.assertRaises(ValueError):
+            ftmo_us100_utc_from_raw(raw)
+
+    def test_weekend_timestamp_rejected(self):
+        raw = self.raw_seconds([
+            "2025-03-09T16:30:00+00:00",
+        ])
+
+        with self.assertRaises(ValueError):
+            ftmo_us100_utc_from_raw(raw)
+
+    def test_duplicate_timestamps_rejected(self):
+        raw = self.raw_seconds([
+            "2025-06-02T16:30:00+00:00",
+            "2025-06-02T16:30:00+00:00",
+        ])
+
+        with self.assertRaises(ValueError):
+            ftmo_us100_utc_from_raw(raw)
+
+    def test_non_minute_aligned_timestamp_rejected(self):
+        raw = self.raw_seconds([
+            "2025-06-02T16:30:15+00:00",
+        ])
+
+        with self.assertRaises(ValueError):
+            ftmo_us100_utc_from_raw(raw)
 
 if __name__ == "__main__":
     unittest.main()
